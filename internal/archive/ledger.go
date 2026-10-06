@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync"
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
@@ -23,46 +24,46 @@ type Source interface {
 	Ledger(ctx context.Context, seq uint32, withTransactions bool) (*Ledger, error)
 }
 
-// Ledger implements Source over a live archive.
+// Ledger implements Source over a live archive. The checkpoint's category
+// files are fetched concurrently.
 func (c *Client) Ledger(ctx context.Context, seq uint32, withTransactions bool) (*Ledger, error) {
 	cp := Checkpoint(seq)
-	file := func(cat Category) ([][]byte, error) {
-		raw, err := c.File(ctx, cat, cp)
+	cats := []Category{Headers, SCP, Results}
+	if withTransactions {
+		cats = append(cats, Transactions)
+	}
+	records := make([][][]byte, len(cats))
+	errs := make([]error, len(cats))
+	var wg sync.WaitGroup
+	for i, cat := range cats {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			raw, err := c.File(ctx, cat, cp)
+			if err == nil {
+				records[i], err = Frames(raw)
+			}
+			errs[i] = err
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			return nil, err
 		}
-		return Frames(raw)
 	}
-	out := &Ledger{Sequence: seq}
 
-	headers, err := file(Headers)
-	if err != nil {
-		return nil, err
-	}
-	if out.Header, err = find(headers, seq, headerSeq); err != nil {
+	out := &Ledger{Sequence: seq}
+	var err error
+	if out.Header, err = find(records[0], seq, headerSeq); err != nil {
 		return nil, fmt.Errorf("ledger header: %w", err)
 	}
-
-	scp, err := file(SCP)
-	if err != nil {
-		return nil, err
-	}
-	if out.SCP, err = find(scp, seq, scpSeq); err != nil {
+	if out.SCP, err = find(records[1], seq, scpSeq); err != nil {
 		return nil, fmt.Errorf("scp messages: %w", err)
 	}
-
-	results, err := file(Results)
-	if err != nil {
-		return nil, err
-	}
-	out.Results, _ = find(results, seq, leadingSeq)
-
+	out.Results, _ = find(records[2], seq, leadingSeq)
 	if withTransactions {
-		txs, err := file(Transactions)
-		if err != nil {
-			return nil, err
-		}
-		out.Transactions, _ = find(txs, seq, leadingSeq)
+		out.Transactions, _ = find(records[3], seq, leadingSeq)
 	}
 	return out, nil
 }
