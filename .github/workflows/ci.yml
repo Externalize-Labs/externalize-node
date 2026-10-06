@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+
+  # The bundle in testdata must stay identical to externalize-core's conformance fixture.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the Rust verifier's fixture
+        run: curl -fsSL -o upstream.json https://raw.githubusercontent.com/Externalize-Labs/externalize/main/crates/externalize-core/tests/fixtures/mainnet/bundle-64791359.json
+      - run: cmp upstream.json testdata/bundle-64791359.json
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t exnode .
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No stray working files
+        run: |
+          bad=$(git ls-files | grep -Ei '(^|/)(ISSUE_[0-9]+.*|.*_SUMMARY\.md|IMPLEMENTATION_.*|PR\.md|pr_body\.md|.*\.bak|.*\.orig|modify_.*\.py)$' || true)
+          if [ -n "$bad" ]; then echo "Remove these files from the PR:"; echo "$bad"; exit 1; fi
