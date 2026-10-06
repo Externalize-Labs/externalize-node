@@ -31,40 +31,55 @@ go install github.com/Externalize-Labs/externalize-node/cmd/exnode@latest
 
 # prove a contract call's return value and events (ledger looked up via RPC)
 exnode bundle --rpc https://mainnet.sorobanrpc.com \
-  --invocation 764c39734ec4da0b537f8c5e43b20223274064f84705b18943b1c35512f8da48 > proof.json
+  --invocation 764c39734ec4da0b537f8c5e43b20223274064f84705b18943b1c35512f8da48 --out proof.json
 
-externalize verify proof.json
+# prove everything a contract did in one ledger
+exnode bundle --rpc https://mainnet.sorobanrpc.com --ledger 64791359 \
+  --contract CCNXGPE4AQCSNEBZO3XJDKKDI3CRLYMVS6UWBBTVDLALLWMJEXBORQ2A --out pool.json
+
+externalize verify --events pool.json
 ```
 
-Archived ledgers appear about every 64 ledgers (around six minutes), and RPC
-keeps transaction meta for roughly a week, so invocation proofs must be built
-within that window. Once built, a bundle verifies forever.
+Archives publish every 64 ledgers (about six minutes) and RPC keeps
+transaction meta for roughly a week, so invocation proofs must be built in that
+window. `exnode status --rpc …` shows how far the archive currently trails.
+Once built, a bundle verifies forever.
 
 ## Commands
 
 ```text
-exnode bundle [--ledger N] [--tx HASH]... [--invocation HASH[:OP]]... [--txset]
-exnode serve  [--addr :8080]
+exnode bundle [--ledger N] [--tx HASH]... [--invocation HASH[:OP]]... [--contract C…]... [--txset] [--out FILE]
+exnode serve  [--addr :8080] [--rate 5] [--burst 20] [--cors ORIGINS]
+exnode status
 ```
 
 | Flag | Env | Default |
 |---|---|---|
 | `--network` | `EXNODE_NETWORK` | `public` (or `testnet`) |
-| `--archive` | `EXNODE_ARCHIVE` | SDF's archive for the network |
-| `--rpc` | `EXNODE_RPC` | none; needed for `--invocation` or when `--ledger` is omitted |
+| `--archive` | `EXNODE_ARCHIVE` | SDF's three archives for the network, comma-separated; failed or corrupt mirrors are skipped with retries and backoff |
+| `--rpc` | `EXNODE_RPC` | none; needed for `--invocation`, `--contract`, or when `--ledger` is omitted |
 | `--cache` | `EXNODE_CACHE` | none; checkpoint files are immutable, so cached files never expire |
+| `--rate`, `--burst` | | 5 requests/s per client IP, bursts of 20, on `/v1` routes (`serve`) |
+| `--cors` | `EXNODE_CORS` | none; browser origins allowed to call the API, `*` for any (`serve`) |
 
 ## HTTP API
 
+The full contract is [`api/openapi.yaml`](api/openapi.yaml).
+
 | Route | Returns |
 |---|---|
-| `GET /v1/ledgers/{seq}/bundle?tx=…&invocation=hash:op&txset=true` | Bundle for a ledger, with any claims |
+| `GET /v1/ledgers/{seq}/bundle?tx=…&invocation=hash:op&contract=C…&txset=true` | Bundle for a ledger, with any claims |
 | `GET /v1/transactions/{hash}/bundle[?op=N]` | Transaction claim, or invocation claim for op N |
-| `GET /healthz` | Network and RPC status |
+| `GET /v1/status` | Archive tip, RPC latest ledger, and the lag between them |
+| `GET /healthz` | Liveness |
+| `GET /metrics` | Prometheus metrics: requests by status class, bundles built and failed |
 
-Bundles are served with `Cache-Control: immutable`. Errors are JSON
-`{"error": "…"}` with 400 (bad input), 404 (not archived or outside RPC
-retention), 501 (no RPC configured) or 502 (upstream failure).
+Bundles carry a strong `ETag` (`If-None-Match` gets a 304), are cacheable
+forever (`Cache-Control: immutable`), and are gzipped for clients that accept it
+(about 3.3x smaller). Every response has an `X-Request-ID`, and every request is
+logged as structured JSON. Errors are JSON `{"error": "…"}`: 400 bad input, 404
+not archived yet or outside RPC retention, 429 rate limited (with
+`Retry-After`), 501 no RPC configured, 502 upstream failure.
 
 ```sh
 docker build -t exnode .
@@ -82,10 +97,10 @@ that the copy matches upstream.
 
 | Package | Responsibility |
 |---|---|
-| `internal/archive` | Checkpoint math, record framing, cached HTTP fetches |
-| `internal/rpc` | `getTransaction` client |
+| `internal/archive` | Checkpoint math, record framing (fuzzed), mirror failover, disk and memory caches |
+| `internal/rpc` | `getTransaction`, `getEvents` and `getLatestLedger` client |
 | `internal/bundle` | Request validation, bundle assembly, invocation extraction from meta |
-| `internal/server` | HTTP routes and error mapping |
+| `internal/server` | HTTP routes, error mapping, ETags and gzip, metrics, rate limiting, CORS, access logs |
 | `cmd/exnode` | CLI |
 
 ## Contributing
