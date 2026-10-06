@@ -45,6 +45,8 @@ Usage:
   exnode bundle [flags]   write one bundle to stdout
   exnode serve  [flags]   serve bundles over HTTP
   exnode status [flags]   show the archive tip and how far it trails RPC
+  exnode cache prune --cache DIR --max-size 1GB
+                          delete the oldest cached checkpoint files
   exnode version
 
 Run "exnode <command> -h" for flags. Every flag can also be set with an
@@ -104,6 +106,8 @@ func main() {
 		err = runServe(os.Args[2:])
 	case "status":
 		err = runStatus(os.Args[2:])
+	case "cache":
+		err = runCache(os.Args[2:])
 	case "version":
 		fmt.Println("exnode", version)
 	case "-h", "--help", "help":
@@ -248,6 +252,52 @@ func runStatus(args []string) error {
 	lag := int64(latest) - int64(tip)
 	fmt.Printf("rpc latest    %d\narchive lag   %d ledgers (~%ds)\n", latest, lag, lag*6)
 	return nil
+}
+
+func runCache(args []string) error {
+	if len(args) == 0 || args[0] != "prune" {
+		return errors.New("usage: exnode cache prune --cache DIR --max-size SIZE")
+	}
+	fs := flag.NewFlagSet("cache prune", flag.ExitOnError)
+	dir := fs.String("cache", env("EXNODE_CACHE", ""), "cache directory")
+	size := fs.String("max-size", "1GB", "size to prune down to (e.g. 500MB, 2GB)")
+	_ = fs.Parse(args[1:])
+	if *dir == "" {
+		return errors.New("--cache is required")
+	}
+	limit, err := parseSize(*size)
+	if err != nil {
+		return err
+	}
+	res, err := archive.Prune(*dir, limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("removed %d of %d files; %d -> %d bytes\n", res.Removed, res.Files, res.Before, res.After)
+	return nil
+}
+
+// parseSize reads sizes like 1500, 500MB or 2GB (powers of 1024).
+func parseSize(s string) (int64, error) {
+	units := []struct {
+		suffix string
+		mult   int64
+	}{{"TB", 1 << 40}, {"GB", 1 << 30}, {"MB", 1 << 20}, {"KB", 1 << 10}, {"B", 1}}
+	upper := strings.ToUpper(strings.TrimSpace(s))
+	for _, u := range units {
+		if num, ok := strings.CutSuffix(upper, u.suffix); ok {
+			n, err := strconv.ParseInt(strings.TrimSpace(num), 10, 64)
+			if err != nil || n < 0 {
+				return 0, fmt.Errorf("invalid size %q", s)
+			}
+			return n * u.mult, nil
+		}
+	}
+	n, err := strconv.ParseInt(upper, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	return n, nil
 }
 
 func env(key, fallback string) string {
