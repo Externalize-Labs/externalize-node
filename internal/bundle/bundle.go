@@ -75,10 +75,16 @@ type Invocation struct {
 
 // Request describes the bundle to build. Ledger may be zero when at least one
 // transaction is named; it is then taken from RPC.
+//
+// Contracts adds an invocation claim for every successful operation in Ledger
+// that emitted an event from one of these contracts. Operations whose events
+// come from classic operations (Stellar Asset Contract events since protocol
+// 23) are skipped: they are not committed to the ledger and cannot be proven.
 type Request struct {
 	Ledger       uint32
 	Transactions []string
 	Invocations  []Invocation
+	Contracts    []string
 	WithTxSet    bool
 }
 
@@ -100,9 +106,23 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Bundle, error) {
 	if err := validate(req); err != nil {
 		return nil, err
 	}
-	needRPC := len(req.Invocations) > 0 || req.Ledger == 0
+	needRPC := len(req.Invocations) > 0 || len(req.Contracts) > 0 || req.Ledger == 0
 	if needRPC && b.RPC == nil {
 		return nil, ErrNoRPC
+	}
+	skip := map[string]bool{} // contract-derived invocations that turned out not to be provable
+	if len(req.Contracts) > 0 {
+		derived, err := b.contractInvocations(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		for _, inv := range derived {
+			skip[inv.TxHash] = true
+		}
+		req.Invocations = append(req.Invocations, derived...)
+		if n := len(req.Transactions) + len(req.Invocations); n > MaxClaims {
+			return nil, fmt.Errorf("%w: %d claims exceeds the limit of %d", ErrBadRequest, n, MaxClaims)
+		}
 	}
 
 	metas := map[string]*rpc.Transaction{}
@@ -149,11 +169,39 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Bundle, error) {
 	}
 	for _, inv := range req.Invocations {
 		ret, events, err := InvocationFromMeta(metas[inv.TxHash].ResultMetaXDR, inv.OpIndex)
+		if err != nil && skip[inv.TxHash] && errors.Is(err, ErrBadRequest) {
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("transaction %s: %w", inv.TxHash, err)
 		}
 		op := inv.OpIndex
 		out.Claims = append(out.Claims, Claim{Kind: "invocation", TxHash: inv.TxHash, OpIndex: &op, ReturnValue: ret, Events: events})
+	}
+	return out, nil
+}
+
+func (b *Builder) contractInvocations(ctx context.Context, req Request) ([]Invocation, error) {
+	if req.Ledger == 0 {
+		return nil, fmt.Errorf("%w: contract queries need a ledger", ErrBadRequest)
+	}
+	var out []Invocation
+	seen := map[Invocation]bool{}
+	for _, inv := range req.Invocations {
+		seen[inv] = true
+	}
+	for _, c := range req.Contracts {
+		found, err := b.RPC.ContractInvocations(ctx, c, req.Ledger)
+		if err != nil {
+			return nil, fmt.Errorf("contract %s: %w", c, err)
+		}
+		for _, f := range found {
+			inv := Invocation{TxHash: f.TxHash, OpIndex: f.OpIndex}
+			if !seen[inv] {
+				seen[inv] = true
+				out = append(out, inv)
+			}
+		}
 	}
 	return out, nil
 }
@@ -164,6 +212,11 @@ func validate(req Request) error {
 	}
 	if req.Ledger == 0 && len(req.Transactions)+len(req.Invocations) == 0 {
 		return fmt.Errorf("%w: name a ledger or at least one transaction", ErrBadRequest)
+	}
+	for _, c := range req.Contracts {
+		if len(c) != 56 || c[0] != 'C' {
+			return fmt.Errorf("%w: %q is not a contract address", ErrBadRequest, c)
+		}
 	}
 	check := func(h string) error {
 		if b, err := hex.DecodeString(h); err != nil || len(b) != 32 || h != hex.EncodeToString(b) {

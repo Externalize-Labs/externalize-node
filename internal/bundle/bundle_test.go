@@ -41,14 +41,23 @@ func newBuilder(t *testing.T, withRPC bool) *bundle.Builder {
 func fakeRPC(t *testing.T) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Method string            `json:"method"`
-			Params map[string]string `json:"params"`
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Method != "getTransaction" {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		meta, err := os.ReadFile(testdata + "/rpc/meta-" + req.Params["hash"][:8] + ".xdr.b64")
+		if req.Method == "getEvents" {
+			// The pool contract emitted two events in tx4's first operation.
+			ev := func(i int) map[string]any {
+				return map[string]any{"ledger": ledger, "txHash": tx4, "operationIndex": 0, "inSuccessfulContractCall": true, "id": i}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"events": []any{ev(1), ev(2)}}})
+			return
+		}
+		hash, _ := req.Params["hash"].(string)
+		meta, err := os.ReadFile(testdata + "/rpc/meta-" + hash[:8] + ".xdr.b64")
 		result := map[string]any{"status": "NOT_FOUND"}
 		if err == nil {
 			result = map[string]any{"status": "SUCCESS", "ledger": ledger, "resultMetaXdr": strings.TrimSpace(string(meta))}
@@ -192,5 +201,35 @@ func TestFailedTransactionsCannotProveInvocations(t *testing.T) {
 	_, err := b.Build(context.Background(), bundle.Request{Invocations: []bundle.Invocation{{TxHash: tx4}}})
 	if !errors.Is(err, bundle.ErrBadRequest) || !strings.Contains(err.Error(), "did not succeed") {
 		t.Fatalf("want a did-not-succeed ErrBadRequest, got %v", err)
+	}
+}
+
+const pool = "CCNXGPE4AQCSNEBZO3XJDKKDI3CRLYMVS6UWBBTVDLALLWMJEXBORQ2A"
+
+func TestContractQueriesProveEveryInvocation(t *testing.T) {
+	b, err := newBuilder(t, true).Build(context.Background(), bundle.Request{Ledger: ledger, Contracts: []string{pool}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Claims) != 1 || b.Claims[0].Kind != "invocation" || b.Claims[0].TxHash != tx4 || len(b.Claims[0].Events) != 4 {
+		t.Fatalf("want one deduplicated invocation claim for tx4, got %+v", b.Claims)
+	}
+	// Identical to the conformance fixture's invocation claim.
+	want := golden(t)
+	got := encode(t, b)
+	claim := got[strings.Index(got, `"kind": "invocation"`):]
+	if !strings.Contains(want, claim[:strings.Index(claim, "]")]) {
+		t.Fatal("contract-derived claim differs from the fixture's")
+	}
+}
+
+func TestContractQueriesNeedALedgerAndAValidAddress(t *testing.T) {
+	for name, req := range map[string]bundle.Request{
+		"no ledger": {Transactions: []string{tx25}, Contracts: []string{pool}},
+		"bad id":    {Ledger: ledger, Contracts: []string{"GABC"}},
+	} {
+		if _, err := newBuilder(t, true).Build(context.Background(), req); !errors.Is(err, bundle.ErrBadRequest) {
+			t.Errorf("%s: want ErrBadRequest, got %v", name, err)
+		}
 	}
 }

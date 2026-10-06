@@ -127,9 +127,10 @@ func runBundle(args []string) error {
 	var c common
 	c.register(fs)
 	ledger := fs.Uint("ledger", 0, "ledger sequence (optional when a transaction is given)")
-	var txs, invs list
+	var txs, invs, contracts list
 	fs.Var(&txs, "tx", "prove a transaction was applied (repeatable)")
 	fs.Var(&invs, "invocation", "prove a contract call's return value and events: <hash>[:<op>] (repeatable)")
+	fs.Var(&contracts, "contract", "prove every invocation in --ledger that emitted events from this contract (repeatable)")
 	txset := fs.Bool("txset", false, "include the full transaction set")
 	_ = fs.Parse(args)
 
@@ -137,7 +138,7 @@ func runBundle(args []string) error {
 	if err != nil {
 		return err
 	}
-	req := bundle.Request{Ledger: uint32(*ledger), Transactions: txs, WithTxSet: *txset}
+	req := bundle.Request{Ledger: uint32(*ledger), Transactions: txs, Contracts: contracts, WithTxSet: *txset}
 	for _, v := range invs {
 		hash, op, _ := strings.Cut(v, ":")
 		n, err := strconv.ParseUint(defaultTo(op, "0"), 10, 32)

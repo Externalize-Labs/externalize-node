@@ -23,9 +23,16 @@ type Transaction struct {
 // never existed or because it is older than the RPC's retention window.
 var ErrNotFound = errors.New("transaction not found or outside RPC retention")
 
-// Source returns transactions by hash.
+// Source returns transactions by hash and the invocations behind contract events.
 type Source interface {
 	GetTransaction(ctx context.Context, hash string) (*Transaction, error)
+	ContractInvocations(ctx context.Context, contract string, ledger uint32) ([]Invocation, error)
+}
+
+// Invocation is one contract-calling operation.
+type Invocation struct {
+	TxHash  string
+	OpIndex uint32
 }
 
 // UserAgent is sent with every RPC request.
@@ -52,6 +59,50 @@ func (c *Client) GetTransaction(ctx context.Context, hash string) (*Transaction,
 		return nil, ErrNotFound
 	}
 	return &out, nil
+}
+
+// ContractInvocations lists, in ledger order and without duplicates, the
+// operations that emitted events from contract in ledger, keeping only those
+// inside successful contract calls.
+func (c *Client) ContractInvocations(ctx context.Context, contract string, ledger uint32) ([]Invocation, error) {
+	type event struct {
+		Ledger         uint32 `json:"ledger"`
+		TxHash         string `json:"txHash"`
+		OperationIndex uint32 `json:"operationIndex"`
+		InSuccessful   bool   `json:"inSuccessfulContractCall"`
+	}
+	params := map[string]any{
+		"startLedger": ledger,
+		"endLedger":   ledger + 1,
+		"filters":     []any{map[string]any{"type": "contract", "contractIds": []string{contract}}},
+		"pagination":  map[string]any{"limit": 1000},
+	}
+	seen := map[Invocation]bool{}
+	var out []Invocation
+	for page := 0; page < 100; page++ {
+		var res struct {
+			Events []event `json:"events"`
+			Cursor string  `json:"cursor"`
+		}
+		if err := c.call(ctx, "getEvents", params, &res); err != nil {
+			return nil, err
+		}
+		for _, e := range res.Events {
+			inv := Invocation{TxHash: e.TxHash, OpIndex: e.OperationIndex}
+			if e.Ledger == ledger && e.InSuccessful && !seen[inv] {
+				seen[inv] = true
+				out = append(out, inv)
+			}
+		}
+		if len(res.Events) < 1000 || res.Cursor == "" {
+			return out, nil
+		}
+		params = map[string]any{
+			"filters":    params["filters"],
+			"pagination": map[string]any{"cursor": res.Cursor, "limit": 1000},
+		}
+	}
+	return nil, fmt.Errorf("getEvents: too many events for %s in ledger %d", contract, ledger)
 }
 
 // LatestLedger returns the newest ledger the RPC has ingested.

@@ -39,7 +39,7 @@ type Server struct {
 //	GET /healthz
 //	GET /metrics
 //	GET /v1/status
-//	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&txset=true
+//	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&contract=<C…>&txset=true
 //	GET /v1/transactions/{hash}/bundle?op=<n>
 func (s *Server) Handler() http.Handler {
 	s.metrics = newMetrics()
@@ -101,7 +101,7 @@ func (s *Server) ledgerBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	req := bundle.Request{Ledger: uint32(seq), Transactions: q["tx"], WithTxSet: q.Get("txset") == "true"}
+	req := bundle.Request{Ledger: uint32(seq), Transactions: q["tx"], Contracts: q["contract"], WithTxSet: q.Get("txset") == "true"}
 	for _, v := range q["invocation"] {
 		inv, err := parseInvocation(v)
 		if err != nil {
