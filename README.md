@@ -51,6 +51,7 @@ Once built, a bundle verifies forever.
 exnode bundle [--ledger N] [--tx HASH]... [--invocation HASH[:OP]]... [--contract C…]... [--txset] [--out FILE]
 exnode serve  [--addr :8080] [--rate 5] [--burst 20] [--cors ORIGINS]
 exnode status
+exnode cache prune --cache DIR --max-size 2GB
 ```
 
 | Flag | Env | Default |
@@ -61,6 +62,10 @@ exnode status
 | `--cache` | `EXNODE_CACHE` | none; checkpoint files are immutable, so cached files never expire |
 | `--rate`, `--burst` | | 5 requests/s per client IP, bursts of 20, on `/v1` routes (`serve`) |
 | `--cors` | `EXNODE_CORS` | none; browser origins allowed to call the API, `*` for any (`serve`) |
+| `--out` | | stdout; `bundle` writes the file atomically |
+
+The disk cache never expires entries on its own (checkpoint files are
+immutable); `exnode cache prune` trims it to a size budget, oldest files first.
 
 ## HTTP API
 
@@ -70,6 +75,7 @@ The full contract is [`api/openapi.yaml`](api/openapi.yaml).
 |---|---|
 | `GET /v1/ledgers/{seq}/bundle?tx=…&invocation=hash:op&contract=C…&txset=true` | Bundle for a ledger, with any claims |
 | `GET /v1/transactions/{hash}/bundle[?op=N]` | Transaction claim, or invocation claim for op N |
+| `GET /v1/ledgers/latest/bundle` | 302 to the newest archived ledger's bundle (query parameters carried over) |
 | `GET /v1/status` | Archive tip, RPC latest ledger, and the lag between them |
 | `GET /healthz` | Liveness |
 | `GET /metrics` | Prometheus metrics: requests by status class, bundles built and failed |
