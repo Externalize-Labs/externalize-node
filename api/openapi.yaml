@@ -1,0 +1,178 @@
+openapi: 3.1.0
+info:
+  title: exnode
+  version: 0.1.0
+  summary: Build Externalize proof bundles from Stellar history archives and RPC.
+  description: |
+    exnode is untrusted by design. It copies archive records byte for byte and
+    never decides validity; verify every bundle with
+    [externalize](https://github.com/Externalize-Labs/externalize) against a
+    trust set you choose. The bundle format is specified in
+    [docs/bundle-format.md](https://github.com/Externalize-Labs/externalize/blob/main/docs/bundle-format.md).
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /v1/ledgers/{seq}/bundle:
+    get:
+      summary: Bundle for a ledger, with optional claims
+      operationId: ledgerBundle
+      parameters:
+        - $ref: "#/components/parameters/Seq"
+        - name: tx
+          in: query
+          description: Prove this transaction was applied. Repeatable.
+          schema: { type: array, items: { $ref: "#/components/schemas/Hash" } }
+          style: form
+          explode: true
+        - name: invocation
+          in: query
+          description: Prove a contract call's return value and events, as `<hash>` or `<hash>:<op index>`. Repeatable.
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - name: contract
+          in: query
+          description: Prove every invocation in this ledger that emitted events from the contract. Repeatable.
+          schema: { type: array, items: { type: string, pattern: "^C[A-Z2-7]{55}$" } }
+          style: form
+          explode: true
+        - name: txset
+          in: query
+          description: Include the ledger's full transaction set.
+          schema: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/Bundle" }
+        "304": { description: Not modified (matched `If-None-Match`). }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /v1/transactions/{hash}/bundle:
+    get:
+      summary: Bundle for one transaction, looked up through RPC
+      operationId: transactionBundle
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Hash" }
+        - name: op
+          in: query
+          description: Prove operation `op` as a contract invocation instead of only proving the transaction was applied.
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200": { $ref: "#/components/responses/Bundle" }
+        "304": { description: Not modified (matched `If-None-Match`). }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /v1/status:
+    get:
+      summary: Archive tip and its lag behind RPC
+      operationId: status
+      responses:
+        "200":
+          description: Ledgers newer than `archive_tip` cannot be bundled yet.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  network: { type: string }
+                  archive_tip: { type: integer }
+                  rpc_latest: { type: integer }
+                  archive_lag_ledgers: { type: integer }
+  /healthz:
+    get:
+      summary: Liveness
+      operationId: health
+      responses:
+        "200":
+          description: Running.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+                  network: { type: string }
+                  rpc: { type: boolean, description: Whether an RPC endpoint is configured. }
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: metrics
+      responses:
+        "200":
+          description: Text exposition format.
+          content:
+            text/plain: { schema: { type: string } }
+components:
+  parameters:
+    Seq:
+      name: seq
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1, maximum: 4294967295 }
+  schemas:
+    Hash:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    Bundle:
+      type: object
+      required: [format, network, ledger, scp]
+      additionalProperties: false
+      properties:
+        format: { type: string, const: externalize/bundle/v1 }
+        network: { type: string }
+        ledger: { type: string, description: Base64 XDR LedgerHeaderHistoryEntry }
+        scp: { type: string, description: Base64 XDR ScpHistoryEntry }
+        results: { type: string, description: Base64 XDR TransactionHistoryResultEntry }
+        transactions: { type: string, description: Base64 XDR TransactionHistoryEntry }
+        claims:
+          type: array
+          maxItems: 64
+          items:
+            oneOf:
+              - type: object
+                required: [kind, tx_hash]
+                additionalProperties: false
+                properties:
+                  kind: { const: transaction }
+                  tx_hash: { $ref: "#/components/schemas/Hash" }
+              - type: object
+                required: [kind, tx_hash, op_index, return_value, events]
+                additionalProperties: false
+                properties:
+                  kind: { const: invocation }
+                  tx_hash: { $ref: "#/components/schemas/Hash" }
+                  op_index: { type: integer, minimum: 0 }
+                  return_value: { type: string, description: Base64 XDR ScVal }
+                  events: { type: array, items: { type: string, description: Base64 XDR ContractEvent } }
+  responses:
+    Bundle:
+      description: |
+        A proof bundle. Served with a strong `ETag`, `Cache-Control: immutable`,
+        and gzip when the client sends `Accept-Encoding: gzip`.
+      headers:
+        ETag: { schema: { type: string } }
+        X-Request-ID: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Bundle" }
+    Error:
+      description: |
+        400 bad input, 404 not archived yet or outside RPC retention, 429 rate
+        limited (see `Retry-After`), 501 no RPC configured, 502 upstream failure.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
