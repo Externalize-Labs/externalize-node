@@ -143,3 +143,22 @@ func TestRequestsCarryAnID(t *testing.T) {
 		t.Fatal("client request id not echoed")
 	}
 }
+
+func TestMetricsCountRequestsAndBundles(t *testing.T) {
+	srv := newServer(t)
+	get(t, srv, "/v1/ledgers/64791359/bundle?tx="+tx25)
+	get(t, srv, "/v1/ledgers/abc/bundle")
+	_, body, hdr := get(t, srv, "/metrics")
+	if !strings.HasPrefix(hdr.Get("Content-Type"), "text/plain") {
+		t.Fatal("metrics must be text/plain")
+	}
+	for _, want := range []string{
+		`exnode_http_requests_total{class="2xx"} 1`,
+		`exnode_http_requests_total{class="4xx"} 1`,
+		"exnode_bundles_built_total 1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}

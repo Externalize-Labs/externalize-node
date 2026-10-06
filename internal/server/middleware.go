@@ -37,7 +37,7 @@ func newRequestID() string {
 
 // withAccessLog tags every request with an X-Request-ID (kept if the client
 // sent a sane one) and logs method, path, status, size and duration.
-func withAccessLog(log *slog.Logger, next http.Handler) http.Handler {
+func withAccessLog(log *slog.Logger, m *metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
 		if len(id) == 0 || len(id) > 64 {
@@ -47,6 +47,7 @@ func withAccessLog(log *slog.Logger, next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w}
 		start := time.Now()
 		next.ServeHTTP(rec, r)
+		m.request(rec.status)
 		log.Info("request",
 			"id", id,
 			"method", r.Method,

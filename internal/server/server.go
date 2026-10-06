@@ -25,21 +25,26 @@ type Server struct {
 	// Optional sources for GET /v1/status.
 	ArchiveTip func(context.Context) (uint32, error)
 	RPCLatest  func(context.Context) (uint32, error)
+
+	metrics *metrics
 }
 
 // Handler returns the HTTP routes.
 //
 //	GET /healthz
+//	GET /metrics
 //	GET /v1/status
 //	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&txset=true
 //	GET /v1/transactions/{hash}/bundle?op=<n>
 func (s *Server) Handler() http.Handler {
+	s.metrics = newMetrics()
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
-	return withAccessLog(s.Log, mux)
+	return withAccessLog(s.Log, s.metrics, mux)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -121,6 +126,7 @@ func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Request) {
 	b, err := s.Builder.Build(r.Context(), req)
 	if err != nil {
+		s.metrics.failed.Add(1)
 		status := statusFor(err)
 		if status >= 500 {
 			s.Log.Error("building bundle", "path", r.URL.Path, "err", err)
@@ -133,6 +139,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Reques
 		writeError(w, http.StatusInternalServerError, "encoding bundle")
 		return
 	}
+	s.metrics.built.Add(1)
 	w.Header().Set("Content-Type", "application/json")
 	// Archived ledgers never change, so neither does a bundle built from one.
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
