@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -132,6 +133,7 @@ func runBundle(args []string) error {
 	fs.Var(&invs, "invocation", "prove a contract call's return value and events: <hash>[:<op>] (repeatable)")
 	fs.Var(&contracts, "contract", "prove every invocation in --ledger that emitted events from this contract (repeatable)")
 	txset := fs.Bool("txset", false, "include the full transaction set")
+	outPath := fs.String("out", "", "write the bundle to this file instead of stdout")
 	_ = fs.Parse(args)
 
 	b, err := c.builder()
@@ -153,7 +155,27 @@ func runBundle(args []string) error {
 	if err != nil {
 		return err
 	}
-	return bundle.Encode(os.Stdout, out)
+	if *outPath == "" {
+		return bundle.Encode(os.Stdout, out)
+	}
+	// Write to a temporary file first so a failed run never leaves half a bundle.
+	tmp, err := os.CreateTemp(filepath.Dir(*outPath), ".bundle-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := bundle.Encode(tmp, out); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), *outPath); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s: ledger %d, %d claim(s)\n", *outPath, req.Ledger, len(out.Claims))
+	return nil
 }
 
 func runServe(args []string) error {
