@@ -54,6 +54,17 @@ func (c *Client) GetTransaction(ctx context.Context, hash string) (*Transaction,
 	return &out, nil
 }
 
+// LatestLedger returns the newest ledger the RPC has ingested.
+func (c *Client) LatestLedger(ctx context.Context) (uint32, error) {
+	var out struct {
+		Sequence uint32 `json:"sequence"`
+	}
+	if err := c.call(ctx, "getLatestLedger", struct{}{}, &out); err != nil {
+		return 0, err
+	}
+	return out.Sequence, nil
+}
+
 func (c *Client) call(ctx context.Context, method string, params, result any) error {
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {

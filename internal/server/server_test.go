@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -106,6 +107,21 @@ func TestErrorsMapToStatusCodes(t *testing.T) {
 func TestHealth(t *testing.T) {
 	code, body, _ := get(t, newServer(t), "/healthz")
 	if code != http.StatusOK || !strings.Contains(body, `"rpc":true`) {
+		t.Fatalf("status %d: %s", code, body)
+	}
+}
+
+func TestStatusReportsArchiveLag(t *testing.T) {
+	s := &server.Server{
+		Builder:    &bundle.Builder{Network: "Test SDF Network ; September 2015"},
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ArchiveTip: func(context.Context) (uint32, error) { return 1023, nil },
+		RPCLatest:  func(context.Context) (uint32, error) { return 1050, nil },
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	code, body, _ := get(t, srv, "/v1/status")
+	if code != http.StatusOK || !strings.Contains(body, `"archive_lag_ledgers":27`) || !strings.Contains(body, `"archive_tip":1023`) {
 		t.Fatalf("status %d: %s", code, body)
 	}
 }

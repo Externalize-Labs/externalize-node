@@ -43,6 +43,7 @@ const usage = `exnode builds Externalize proof bundles from history archives and
 Usage:
   exnode bundle [flags]   write one bundle to stdout
   exnode serve  [flags]   serve bundles over HTTP
+  exnode status [flags]   show the archive tip and how far it trails RPC
   exnode version
 
 Run "exnode <command> -h" for flags. Every flag can also be set with an
@@ -58,6 +59,17 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.archive, "archive", env("EXNODE_ARCHIVE", ""), "history archive mirror URLs, comma-separated (default: SDF's three archives for the network)")
 	fs.StringVar(&c.rpc, "rpc", env("EXNODE_RPC", ""), "Stellar RPC URL (needed for invocations and transaction lookups)")
 	fs.StringVar(&c.cache, "cache", env("EXNODE_CACHE", ""), "directory for cached checkpoint files")
+}
+
+func (c *common) archiveURL() string {
+	if c.archive != "" {
+		return c.archive
+	}
+	return networks[c.network].archive
+}
+
+func (c *common) archiveClient() *archive.Client {
+	return archive.NewClient(c.archiveURL(), c.cache)
 }
 
 func (c *common) builder() (*bundle.Builder, error) {
@@ -89,6 +101,8 @@ func main() {
 		err = runBundle(os.Args[2:])
 	case "serve":
 		err = runServe(os.Args[2:])
+	case "status":
+		err = runStatus(os.Args[2:])
 	case "version":
 		fmt.Println("exnode", version)
 	case "-h", "--help", "help":
@@ -153,9 +167,13 @@ func runServe(args []string) error {
 		return err
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip}
+	if c.rpc != "" {
+		s.RPCLatest = rpc.NewClient(c.rpc).LatestLedger
+	}
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           (&server.Server{Builder: b, Log: log}).Handler(),
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      5 * time.Minute,
 	}
@@ -171,6 +189,33 @@ func runServe(args []string) error {
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	return nil
+}
+
+func runStatus(args []string) error {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	var c common
+	c.register(fs)
+	_ = fs.Parse(args)
+	if _, ok := networks[c.network]; !ok && c.archive == "" {
+		return fmt.Errorf("unknown network %q (want public or testnet)", c.network)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tip, err := c.archiveClient().Tip(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("archive tip   %d (next checkpoint %d)\n", tip, tip+archive.CheckpointFrequency)
+	if c.rpc == "" {
+		return nil
+	}
+	latest, err := rpc.NewClient(c.rpc).LatestLedger(ctx)
+	if err != nil {
+		return err
+	}
+	lag := int64(latest) - int64(tip)
+	fmt.Printf("rpc latest    %d\narchive lag   %d ledgers (~%ds)\n", latest, lag, lag*6)
 	return nil
 }
 

@@ -3,12 +3,15 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Externalize-Labs/externalize-node/internal/archive"
 	"github.com/Externalize-Labs/externalize-node/internal/bundle"
@@ -19,16 +22,21 @@ import (
 type Server struct {
 	Builder *bundle.Builder
 	Log     *slog.Logger
+	// Optional sources for GET /v1/status.
+	ArchiveTip func(context.Context) (uint32, error)
+	RPCLatest  func(context.Context) (uint32, error)
 }
 
 // Handler returns the HTTP routes.
 //
 //	GET /healthz
+//	GET /v1/status
 //	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&txset=true
 //	GET /v1/transactions/{hash}/bundle?op=<n>
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
 	return mux
@@ -36,6 +44,43 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "network": s.Builder.Network, "rpc": s.Builder.RPC != nil})
+}
+
+// status reports how far the archive trails the network: ledgers newer than
+// the archive tip cannot be bundled yet.
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	out := map[string]any{"network": s.Builder.Network}
+	var tip, latest uint32
+	var tipErr, rpcErr error
+	var wg sync.WaitGroup
+	if s.ArchiveTip != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); tip, tipErr = s.ArchiveTip(ctx) }()
+	}
+	if s.RPCLatest != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); latest, rpcErr = s.RPCLatest(ctx) }()
+	}
+	wg.Wait()
+	if s.ArchiveTip != nil {
+		out["archive_tip"] = errOr(tip, tipErr)
+	}
+	if s.RPCLatest != nil {
+		out["rpc_latest"] = errOr(latest, rpcErr)
+	}
+	if tipErr == nil && rpcErr == nil && tip > 0 && latest >= tip {
+		out["archive_lag_ledgers"] = latest - tip
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func errOr(v uint32, err error) any {
+	if err != nil {
+		return map[string]string{"error": err.Error()}
+	}
+	return v
 }
 
 func (s *Server) ledgerBundle(w http.ResponseWriter, r *http.Request) {

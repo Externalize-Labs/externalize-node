@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -169,6 +170,27 @@ func (c *Client) download(ctx context.Context, mirror, rel string) ([]byte, erro
 		return nil, fmt.Errorf("fetching %s: HTTP %d", rel, resp.StatusCode)
 	}
 	return readLimited(resp.Body)
+}
+
+// Tip returns the latest checkpoint ledger an archive mirror has published.
+func (c *Client) Tip(ctx context.Context) (uint32, error) {
+	var failures []error
+	for _, m := range c.Mirrors {
+		raw, err := c.download(ctx, m, ".well-known/stellar-history.json")
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		var has struct {
+			CurrentLedger uint32 `json:"currentLedger"`
+		}
+		if err := json.Unmarshal(raw, &has); err != nil || has.CurrentLedger == 0 {
+			failures = append(failures, fmt.Errorf("%s: unreadable stellar-history.json", m))
+			continue
+		}
+		return has.CurrentLedger, nil
+	}
+	return 0, fmt.Errorf("archive tip: %w", errors.Join(failures...))
 }
 
 // ErrNotPublished means the archive has no file for the checkpoint yet.
