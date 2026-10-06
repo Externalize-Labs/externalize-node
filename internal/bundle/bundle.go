@@ -164,8 +164,12 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Bundle, error) {
 		out.Transactions = b64(led.Transactions)
 	}
 
+	claimed := map[string]bool{}
 	for _, h := range req.Transactions {
-		out.Claims = append(out.Claims, Claim{Kind: "transaction", TxHash: h})
+		if !claimed[h] {
+			claimed[h] = true
+			out.Claims = append(out.Claims, Claim{Kind: "transaction", TxHash: h})
+		}
 	}
 	for _, inv := range req.Invocations {
 		ret, events, err := InvocationFromMeta(metas[inv.TxHash].ResultMetaXDR, inv.OpIndex)

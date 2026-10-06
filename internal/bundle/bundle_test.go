@@ -233,3 +233,13 @@ func TestContractQueriesNeedALedgerAndAValidAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestDuplicateTransactionClaimsCollapse(t *testing.T) {
+	b, err := newBuilder(t, false).Build(context.Background(), bundle.Request{Ledger: ledger, Transactions: []string{tx25, tx25, tx25}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Claims) != 1 {
+		t.Fatalf("want 1 claim, got %d", len(b.Claims))
+	}
+}
