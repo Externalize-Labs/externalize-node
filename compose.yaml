@@ -1,0 +1,22 @@
+# Run exnode with a persistent checkpoint cache:
+#   EXNODE_RPC=https://mainnet.sorobanrpc.com docker compose up -d
+#   curl localhost:8080/v1/status
+services:
+  exnode:
+    build: .
+    image: ghcr.io/externalize-labs/exnode:latest
+    ports:
+      - "8080:8080"
+    environment:
+      EXNODE_NETWORK: ${EXNODE_NETWORK:-public}
+      EXNODE_RPC: ${EXNODE_RPC:-}
+      EXNODE_CORS: ${EXNODE_CORS:-}
+    volumes:
+      - exnode-cache:/var/cache/exnode
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/exnode", "version"]
+      interval: 30s
+
+volumes:
+  exnode-cache:
