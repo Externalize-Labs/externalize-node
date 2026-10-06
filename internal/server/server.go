@@ -33,6 +33,8 @@ type Server struct {
 	RateBurst     float64
 	// CORSOrigins lists browser origins allowed to call the API ("*" for any).
 	CORSOrigins []string
+	// BuildTimeout bounds how long one bundle may take to build (default 2 minutes).
+	BuildTimeout time.Duration
 
 	metrics *metrics
 }
@@ -155,7 +157,18 @@ func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Request) {
-	b, err := s.Builder.Build(r.Context(), req)
+	timeout := s.BuildTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	b, err := s.Builder.Build(ctx, req)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		s.metrics.failed.Add(1)
+		writeError(w, http.StatusServiceUnavailable, "building the bundle timed out; the archive or RPC is slow, try again")
+		return
+	}
 	if err != nil {
 		s.metrics.failed.Add(1)
 		status := statusFor(err)

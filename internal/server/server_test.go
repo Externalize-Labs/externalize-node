@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Externalize-Labs/externalize-node/internal/archive"
 	"github.com/Externalize-Labs/externalize-node/internal/bundle"
@@ -263,5 +264,27 @@ func TestLatestRedirectsToTheArchiveTip(t *testing.T) {
 	}
 	if code, body, _ := get(t, srv, "/v1/ledgers/latest/bundle"); code != http.StatusOK || !strings.Contains(body, `"format": "externalize/bundle/v1"`) {
 		t.Fatalf("following the redirect: %d", code)
+	}
+}
+
+// slowArchive never answers before the request's context ends.
+type slowArchive struct{}
+
+func (slowArchive) Ledger(ctx context.Context, _ uint32, _ bool) (*archive.Ledger, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestSlowUpstreamsTimeOutCleanly(t *testing.T) {
+	s := &server.Server{
+		Builder:      &bundle.Builder{Network: "x", Archive: slowArchive{}},
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		BuildTimeout: 50 * time.Millisecond,
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	code, body, _ := get(t, srv, "/v1/ledgers/64791359/bundle")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "timed out") {
+		t.Fatalf("status %d: %s", code, body)
 	}
 }
