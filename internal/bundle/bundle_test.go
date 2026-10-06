@@ -243,3 +243,16 @@ func TestDuplicateTransactionClaimsCollapse(t *testing.T) {
 		t.Fatalf("want 1 claim, got %d", len(b.Claims))
 	}
 }
+
+func TestTestnetCertificates(t *testing.T) {
+	arch := httptest.NewServer(http.FileServer(http.Dir(testdata + "/archive")))
+	defer arch.Close()
+	b := &bundle.Builder{Network: "Test SDF Network ; September 2015", Archive: archive.NewClient(arch.URL, "")}
+	got, err := b.Build(context.Background(), bundle.Request{Ledger: 5052927})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Network != "Test SDF Network ; September 2015" || got.Ledger == "" || got.SCP == "" || got.Claims != nil {
+		t.Fatalf("unexpected testnet bundle: %+v", got)
+	}
+}
