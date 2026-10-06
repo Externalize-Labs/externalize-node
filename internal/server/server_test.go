@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -192,5 +193,51 @@ func TestCORSForAllowedOrigins(t *testing.T) {
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != want || resp.StatusCode != http.StatusNoContent {
 			t.Errorf("%s: allow-origin %q status %d", origin, got, resp.StatusCode)
 		}
+	}
+}
+
+func TestBundlesHaveETagsAndCompress(t *testing.T) {
+	srv := newServer(t)
+	path := srv.URL + "/v1/ledgers/64791359/bundle?tx=" + tx25
+
+	first, err := http.Get(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	etag := first.Header.Get("ETag")
+	if len(etag) != 34 {
+		t.Fatalf("missing strong ETag: %q", etag)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("If-None-Match", etag)
+	again, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again.Body.Close()
+	if again.StatusCode != http.StatusNotModified {
+		t.Fatalf("want 304, got %d", again.StatusCode)
+	}
+
+	// Go's client asks for gzip and decompresses transparently; check the wire.
+	req, _ = http.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	zipped, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zipped.Body.Close()
+	if zipped.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatal("bundle not compressed")
+	}
+	zr, err := gzip.NewReader(zipped.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := io.ReadAll(zr)
+	if !json.Valid(plain) {
+		t.Fatal("decompressed body is not JSON")
 	}
 }

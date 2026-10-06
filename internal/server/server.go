@@ -3,7 +3,10 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -146,10 +149,32 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Reques
 		return
 	}
 	s.metrics.built.Add(1)
-	w.Header().Set("Content-Type", "application/json")
+	writeBundle(w, r, buf.Bytes())
+}
+
+// writeBundle serves bundle JSON with a strong ETag, honours If-None-Match,
+// and gzips the body for clients that accept it (bundles compress about 3x).
+func writeBundle(w http.ResponseWriter, r *http.Request, body []byte) {
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	h := w.Header()
+	h.Set("ETag", etag)
 	// Archived ledgers never change, so neither does a bundle built from one.
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	_, _ = w.Write(buf.Bytes())
+	h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	h.Add("Vary", "Accept-Encoding")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Type", "application/json")
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		_, _ = w.Write(body)
+		return
+	}
+	h.Set("Content-Encoding", "gzip")
+	zw := gzip.NewWriter(w)
+	_, _ = zw.Write(body)
+	_ = zw.Close()
 }
 
 func parseInvocation(v string) (bundle.Invocation, error) {
