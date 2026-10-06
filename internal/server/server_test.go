@@ -125,3 +125,21 @@ func TestStatusReportsArchiveLag(t *testing.T) {
 		t.Fatalf("status %d: %s", code, body)
 	}
 }
+
+func TestRequestsCarryAnID(t *testing.T) {
+	srv := newServer(t)
+	_, _, hdr := get(t, srv, "/healthz")
+	if len(hdr.Get("X-Request-ID")) != 16 {
+		t.Fatalf("missing generated request id: %q", hdr.Get("X-Request-ID"))
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/healthz", nil)
+	req.Header.Set("X-Request-ID", "client-chosen-id")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("X-Request-ID") != "client-chosen-id" {
+		t.Fatal("client request id not echoed")
+	}
+}

@@ -39,7 +39,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
-	return mux
+	return withAccessLog(s.Log, mux)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
