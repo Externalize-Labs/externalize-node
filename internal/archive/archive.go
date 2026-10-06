@@ -78,11 +78,20 @@ func NewClient(mirrors, cacheDir string) *Client {
 	return &Client{
 		Mirrors:  urls,
 		CacheDir: cacheDir,
-		HTTP:     &http.Client{Timeout: 2 * time.Minute},
+		HTTP:     &http.Client{Timeout: 2 * time.Minute, Transport: transport()},
 		Attempts: 3,
 		Backoff:  500 * time.Millisecond,
 		memory:   newLRU(16),
 	}
+}
+
+// transport reuses connections to the (few) archive hosts instead of paying a
+// TLS handshake per checkpoint file.
+func transport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = 16
+	t.IdleConnTimeout = 90 * time.Second
+	return t
 }
 
 // SetMemoryFiles sets how many decoded checkpoint files are kept in memory (0 disables).
