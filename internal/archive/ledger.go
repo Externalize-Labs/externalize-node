@@ -39,11 +39,7 @@ func (c *Client) Ledger(ctx context.Context, seq uint32, withTransactions bool) 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			raw, err := c.File(ctx, cat, cp)
-			if err == nil {
-				records[i], err = Frames(raw)
-			}
-			errs[i] = err
+			records[i], errs[i] = c.records(ctx, cat, cp)
 		}()
 	}
 	wg.Wait()
@@ -66,6 +62,24 @@ func (c *Client) Ledger(ctx context.Context, seq uint32, withTransactions bool) 
 		out.Transactions, _ = find(records[3], seq, leadingSeq)
 	}
 	return out, nil
+}
+
+// records returns a checkpoint file's records, from memory when possible.
+func (c *Client) records(ctx context.Context, cat Category, cp uint32) ([][]byte, error) {
+	key := Path(cat, cp)
+	if recs, ok := c.memory.get(key); ok {
+		return recs, nil
+	}
+	raw, err := c.File(ctx, cat, cp)
+	if err != nil {
+		return nil, err
+	}
+	recs, err := Frames(raw)
+	if err != nil {
+		return nil, err
+	}
+	c.memory.put(key, recs)
+	return recs, nil
 }
 
 func find(records [][]byte, seq uint32, seqOf func([]byte) (uint32, error)) ([]byte, error) {

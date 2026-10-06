@@ -62,6 +62,8 @@ type Client struct {
 	HTTP     *http.Client
 	Attempts int           // rounds over all mirrors
 	Backoff  time.Duration // wait after the first failed round; doubles each round
+
+	memory *lru
 }
 
 // NewClient returns a client for one or more comma-separated mirror URLs.
@@ -78,8 +80,12 @@ func NewClient(mirrors, cacheDir string) *Client {
 		HTTP:     &http.Client{Timeout: 2 * time.Minute},
 		Attempts: 3,
 		Backoff:  500 * time.Millisecond,
+		memory:   newLRU(16),
 	}
 }
+
+// SetMemoryFiles sets how many decoded checkpoint files are kept in memory (0 disables).
+func (c *Client) SetMemoryFiles(n int) { c.memory = newLRU(n) }
 
 // File returns the decompressed contents of a checkpoint file.
 func (c *Client) File(ctx context.Context, cat Category, checkpoint uint32) ([]byte, error) {

@@ -53,6 +53,7 @@ func TestCheckpointFilesAreCachedForever(t *testing.T) {
 
 	cache := t.TempDir()
 	c := NewClient(srv.URL, cache)
+	c.SetMemoryFiles(0) // exercise the disk cache, not the memory one
 	for range 3 {
 		l, err := c.Ledger(context.Background(), 64791359, false)
 		if err != nil {
@@ -141,5 +142,39 @@ func TestGivesUpWhenTheContextEnds(t *testing.T) {
 	defer cancel()
 	if _, err := c.File(ctx, SCP, 64791359); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want deadline exceeded, got %v", err)
+	}
+}
+
+func TestRepeatedLedgersComeFromMemory(t *testing.T) {
+	var hits atomic.Int32
+	fs := http.FileServer(http.Dir("../../testdata/archive"))
+	url := server(t, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		fs.ServeHTTP(w, r)
+	})
+	c := NewClient(url, "")
+	for range 5 {
+		if _, err := c.Ledger(context.Background(), 64791359, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := hits.Load(); n != 3 {
+		t.Fatalf("expected 3 downloads, then memory hits; got %d downloads", n)
+	}
+}
+
+func TestLRUEvictsTheLeastRecentlyUsed(t *testing.T) {
+	l := newLRU(2)
+	l.put("a", nil)
+	l.put("b", nil)
+	l.get("a")
+	l.put("c", nil)
+	if _, ok := l.get("b"); ok {
+		t.Fatal("b should have been evicted")
+	}
+	for _, k := range []string{"a", "c"} {
+		if _, ok := l.get(k); !ok {
+			t.Fatalf("%s should still be cached", k)
+		}
 	}
 }
