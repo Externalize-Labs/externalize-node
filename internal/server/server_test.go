@@ -162,3 +162,35 @@ func TestMetricsCountRequestsAndBundles(t *testing.T) {
 		}
 	}
 }
+
+func TestRateLimitedRequestsGet429(t *testing.T) {
+	s := &server.Server{Builder: &bundle.Builder{Network: "x"}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RatePerSecond: 0.001, RateBurst: 1}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	get(t, srv, "/v1/status")
+	code, _, hdr := get(t, srv, "/v1/status")
+	if code != http.StatusTooManyRequests || hdr.Get("Retry-After") == "" {
+		t.Fatalf("want 429 with Retry-After, got %d", code)
+	}
+	if code, _, _ := get(t, srv, "/healthz"); code != http.StatusOK {
+		t.Fatal("health checks are never limited")
+	}
+}
+
+func TestCORSForAllowedOrigins(t *testing.T) {
+	s := &server.Server{Builder: &bundle.Builder{Network: "x"}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), CORSOrigins: []string{"https://wallet.example"}}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	for origin, want := range map[string]string{"https://wallet.example": "https://wallet.example", "https://evil.example": ""} {
+		req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/v1/status", nil)
+		req.Header.Set("Origin", origin)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != want || resp.StatusCode != http.StatusNoContent {
+			t.Errorf("%s: allow-origin %q status %d", origin, got, resp.StatusCode)
+		}
+	}
+}

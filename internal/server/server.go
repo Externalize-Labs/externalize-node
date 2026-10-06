@@ -25,6 +25,11 @@ type Server struct {
 	// Optional sources for GET /v1/status.
 	ArchiveTip func(context.Context) (uint32, error)
 	RPCLatest  func(context.Context) (uint32, error)
+	// RatePerSecond and RateBurst limit /v1 requests per client IP (0 disables).
+	RatePerSecond float64
+	RateBurst     float64
+	// CORSOrigins lists browser origins allowed to call the API ("*" for any).
+	CORSOrigins []string
 
 	metrics *metrics
 }
@@ -44,7 +49,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
-	return withAccessLog(s.Log, s.metrics, mux)
+	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), mux)
+	return withAccessLog(s.Log, s.metrics, withCORS(s.CORSOrigins, limited))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

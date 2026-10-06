@@ -160,6 +160,9 @@ func runServe(args []string) error {
 	var c common
 	c.register(fs)
 	addr := fs.String("addr", env("EXNODE_ADDR", ":8080"), "listen address")
+	rate := fs.Float64("rate", 5, "requests per second per client IP on /v1 routes (0 disables)")
+	burst := fs.Float64("burst", 20, "requests a client may burst before the rate applies")
+	cors := fs.String("cors", env("EXNODE_CORS", ""), "browser origins allowed to call the API, comma-separated (\"*\" for any)")
 	_ = fs.Parse(args)
 
 	b, err := c.builder()
@@ -167,7 +170,12 @@ func runServe(args []string) error {
 		return err
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip}
+	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip, RatePerSecond: *rate, RateBurst: *burst}
+	for _, o := range strings.Split(*cors, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			s.CORSOrigins = append(s.CORSOrigins, o)
+		}
+	}
 	if c.rpc != "" {
 		s.RPCLatest = rpc.NewClient(c.rpc).LatestLedger
 	}
