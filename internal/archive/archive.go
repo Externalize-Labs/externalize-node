@@ -52,18 +52,32 @@ var UserAgent = "exnode"
 
 // Client fetches checkpoint files over HTTP and caches them on disk.
 // Checkpoint files never change once published, so the cache never expires.
+//
+// With several mirrors, each attempt walks the mirrors in turn: a mirror that
+// errors, times out, 404s or serves a corrupt file is skipped, and a full
+// round of failures backs off exponentially before the next attempt.
 type Client struct {
-	BaseURL  string
+	Mirrors  []string
 	CacheDir string // empty disables caching
 	HTTP     *http.Client
+	Attempts int           // rounds over all mirrors
+	Backoff  time.Duration // wait after the first failed round; doubles each round
 }
 
-// NewClient returns a client with a conservative HTTP timeout.
-func NewClient(baseURL, cacheDir string) *Client {
+// NewClient returns a client for one or more comma-separated mirror URLs.
+func NewClient(mirrors, cacheDir string) *Client {
+	var urls []string
+	for _, m := range strings.Split(mirrors, ",") {
+		if m = strings.TrimRight(strings.TrimSpace(m), "/"); m != "" {
+			urls = append(urls, m)
+		}
+	}
 	return &Client{
-		BaseURL:  strings.TrimRight(baseURL, "/"),
+		Mirrors:  urls,
 		CacheDir: cacheDir,
 		HTTP:     &http.Client{Timeout: 2 * time.Minute},
+		Attempts: 3,
+		Backoff:  500 * time.Millisecond,
 	}
 }
 
@@ -75,13 +89,9 @@ func (c *Client) File(ctx context.Context, cat Category, checkpoint uint32) ([]b
 			return gunzip(gz)
 		}
 	}
-	gz, err := c.download(ctx, rel)
+	gz, raw, err := c.fetch(ctx, rel)
 	if err != nil {
 		return nil, err
-	}
-	raw, err := gunzip(gz)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", rel, err)
 	}
 	if c.CacheDir != "" {
 		_ = writeAtomic(filepath.Join(c.CacheDir, filepath.FromSlash(rel)), gz)
@@ -89,8 +99,54 @@ func (c *Client) File(ctx context.Context, cat Category, checkpoint uint32) ([]b
 	return raw, nil
 }
 
-func (c *Client) download(ctx context.Context, rel string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/"+rel, nil)
+// fetch tries every mirror, up to Attempts rounds, and returns the gzip and
+// its decompressed contents from the first mirror that serves a valid file.
+func (c *Client) fetch(ctx context.Context, rel string) ([]byte, []byte, error) {
+	if len(c.Mirrors) == 0 {
+		return nil, nil, errors.New("no archive mirrors configured")
+	}
+	var failures []error
+	wait := c.Backoff
+	rounds := max(c.Attempts, 1)
+	for round := 0; round < rounds; round++ {
+		missing := 0
+		for i := range c.Mirrors {
+			mirror := c.Mirrors[(round+i)%len(c.Mirrors)]
+			gz, err := c.download(ctx, mirror, rel)
+			if err == nil {
+				raw, gzErr := gunzip(gz)
+				if gzErr == nil {
+					return gz, raw, nil
+				}
+				err = fmt.Errorf("%s/%s: corrupt file: %w", mirror, rel, gzErr)
+			}
+			if errors.Is(err, ErrNotPublished) {
+				missing++
+				// One mirror's 404 is not proof of absence; keep it out of the error chain.
+				err = fmt.Errorf("%s: not found", mirror)
+			}
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			failures = append(failures, err)
+		}
+		if missing == len(c.Mirrors) {
+			return nil, nil, fmt.Errorf("%s: %w", rel, ErrNotPublished)
+		}
+		if round+1 < rounds {
+			select {
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			wait *= 2
+		}
+	}
+	return nil, nil, fmt.Errorf("fetching %s: %w", rel, errors.Join(failures...))
+}
+
+func (c *Client) download(ctx context.Context, mirror, rel string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+rel, nil)
 	if err != nil {
 		return nil, err
 	}

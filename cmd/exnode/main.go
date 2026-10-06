@@ -25,8 +25,17 @@ import (
 var version = "dev"
 
 var networks = map[string]struct{ passphrase, archive string }{
-	"public":  {"Public Global Stellar Network ; September 2015", "https://history.stellar.org/prd/core-live/core_live_001"},
-	"testnet": {"Test SDF Network ; September 2015", "https://history.stellar.org/prd/core-testnet/core_testnet_001"},
+	"public":  {"Public Global Stellar Network ; September 2015", sdfMirrors("core-live/core_live")},
+	"testnet": {"Test SDF Network ; September 2015", sdfMirrors("core-testnet/core_testnet")},
+}
+
+// sdfMirrors lists SDF's three history archives for a network.
+func sdfMirrors(prefix string) string {
+	var urls []string
+	for i := 1; i <= 3; i++ {
+		urls = append(urls, fmt.Sprintf("https://history.stellar.org/prd/%s_%03d", prefix, i))
+	}
+	return strings.Join(urls, ",")
 }
 
 const usage = `exnode builds Externalize proof bundles from history archives and Stellar RPC.
@@ -46,7 +55,7 @@ type common struct {
 
 func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.network, "network", env("EXNODE_NETWORK", "public"), "public or testnet")
-	fs.StringVar(&c.archive, "archive", env("EXNODE_ARCHIVE", ""), "history archive URL (default: SDF archive for the network)")
+	fs.StringVar(&c.archive, "archive", env("EXNODE_ARCHIVE", ""), "history archive mirror URLs, comma-separated (default: SDF's three archives for the network)")
 	fs.StringVar(&c.rpc, "rpc", env("EXNODE_RPC", ""), "Stellar RPC URL (needed for invocations and transaction lookups)")
 	fs.StringVar(&c.cache, "cache", env("EXNODE_CACHE", ""), "directory for cached checkpoint files")
 }

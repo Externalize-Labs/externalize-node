@@ -2,12 +2,14 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCheckpoint(t *testing.T) {
@@ -65,5 +67,79 @@ func TestCheckpointFilesAreCachedForever(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cache, "scp", "03", "dc", "a3", "scp-03dca33f.xdr.gz")); err != nil {
 		t.Fatal("cache file not written at archive path")
+	}
+}
+
+func fixture(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile("../../testdata/archive/scp/03/dc/a3/scp-03dca33f.xdr.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func server(t *testing.T, h http.HandlerFunc) string {
+	t.Helper()
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+	return s.URL
+}
+
+func fast(c *Client) *Client {
+	c.Backoff = time.Millisecond
+	return c
+}
+
+func TestRetriesTransientFailures(t *testing.T) {
+	var calls atomic.Int32
+	good := fixture(t)
+	url := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(good)
+	})
+	if _, err := fast(NewClient(url, "")).File(context.Background(), SCP, 64791359); err != nil {
+		t.Fatalf("third attempt should succeed: %v", err)
+	}
+}
+
+func TestFailsOverToTheNextMirror(t *testing.T) {
+	good := fixture(t)
+	broken := server(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", http.StatusBadGateway) })
+	corrupt := server(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("not gzip")) })
+	healthy := server(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(good) })
+	c := fast(NewClient(broken+","+corrupt+" , "+healthy+"/", ""))
+	if len(c.Mirrors) != 3 {
+		t.Fatalf("mirrors parsed as %v", c.Mirrors)
+	}
+	if _, err := c.File(context.Background(), SCP, 64791359); err != nil {
+		t.Fatalf("healthy mirror should be used: %v", err)
+	}
+}
+
+func TestNotPublishedOnlyWhenEveryMirrorSaysSo(t *testing.T) {
+	missing := func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }
+	c := fast(NewClient(server(t, missing)+","+server(t, missing), ""))
+	if _, err := c.File(context.Background(), SCP, 64791359); !errors.Is(err, ErrNotPublished) {
+		t.Fatalf("want ErrNotPublished, got %v", err)
+	}
+	down := server(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", http.StatusInternalServerError) })
+	c = fast(NewClient(server(t, missing)+","+down, ""))
+	if _, err := c.File(context.Background(), SCP, 64791359); err == nil || errors.Is(err, ErrNotPublished) {
+		t.Fatalf("a mirror that is down is not proof of absence: %v", err)
+	}
+}
+
+func TestGivesUpWhenTheContextEnds(t *testing.T) {
+	url := server(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "busy", http.StatusServiceUnavailable) })
+	c := NewClient(url, "")
+	c.Backoff = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := c.File(ctx, SCP, 64791359); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want deadline exceeded, got %v", err)
 	}
 }
