@@ -118,7 +118,9 @@ func (s *Server) latestBundle(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
-	http.Redirect(w, r, target, http.StatusFound)
+	// The target always starts with a fixed local path, so it cannot point off-site.
+	http.Redirect(w, r, target, http.StatusFound) //nolint:gosec // G710: not an open redirect, see above
+
 }
 
 func (s *Server) ledgerBundle(w http.ResponseWriter, r *http.Request) {

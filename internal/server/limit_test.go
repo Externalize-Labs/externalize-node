@@ -9,7 +9,8 @@ func TestRateLimitPerClient(t *testing.T) {
 	now := time.Unix(0, 0)
 	l := newRateLimiter(1, 2)
 	l.now = func() time.Time { return now }
-	if !l.allow("a") || !l.allow("a") {
+	first, second := l.allow("a"), l.allow("a")
+	if !first || !second {
 		t.Fatal("burst of 2 should pass")
 	}
 	if l.allow("a") {

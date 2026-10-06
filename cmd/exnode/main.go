@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -143,6 +144,9 @@ func runBundle(args []string) error {
 	b, err := c.builder()
 	if err != nil {
 		return err
+	}
+	if *ledger > math.MaxUint32 {
+		return fmt.Errorf("--ledger %d is not a valid ledger sequence", *ledger)
 	}
 	req := bundle.Request{Ledger: uint32(*ledger), Transactions: txs, Contracts: contracts, WithTxSet: *txset}
 	for _, v := range invs {
