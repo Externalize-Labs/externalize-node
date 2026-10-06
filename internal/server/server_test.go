@@ -241,3 +241,27 @@ func TestBundlesHaveETagsAndCompress(t *testing.T) {
 		t.Fatal("decompressed body is not JSON")
 	}
 }
+
+func TestLatestRedirectsToTheArchiveTip(t *testing.T) {
+	arch := httptest.NewServer(http.FileServer(http.Dir("../../testdata/archive")))
+	defer arch.Close()
+	s := &server.Server{
+		Builder:    &bundle.Builder{Network: "Public Global Stellar Network ; September 2015", Archive: archive.NewClient(arch.URL, "")},
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ArchiveTip: func(context.Context) (uint32, error) { return 64791359, nil },
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noFollow.Get(srv.URL + "/v1/ledgers/latest/bundle?txset=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/v1/ledgers/64791359/bundle?txset=true" {
+		t.Fatalf("got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if code, body, _ := get(t, srv, "/v1/ledgers/latest/bundle"); code != http.StatusOK || !strings.Contains(body, `"format": "externalize/bundle/v1"`) {
+		t.Fatalf("following the redirect: %d", code)
+	}
+}

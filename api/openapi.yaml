@@ -51,6 +51,14 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+  /v1/ledgers/latest/bundle:
+    get:
+      summary: Redirect to the newest archived ledger's bundle
+      operationId: latestBundle
+      description: Query parameters are carried over. The redirect lives 60 seconds; its target is immutable.
+      responses:
+        "302": { description: Redirect to `/v1/ledgers/{seq}/bundle`. }
+        "502": { $ref: "#/components/responses/Error" }
   /v1/transactions/{hash}/bundle:
     get:
       summary: Bundle for one transaction, looked up through RPC

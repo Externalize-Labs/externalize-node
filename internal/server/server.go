@@ -42,6 +42,7 @@ type Server struct {
 //	GET /healthz
 //	GET /metrics
 //	GET /v1/status
+//	GET /v1/ledgers/latest/bundle  (302 to the newest archived ledger)
 //	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&contract=<C…>&txset=true
 //	GET /v1/transactions/{hash}/bundle?op=<n>
 func (s *Server) Handler() http.Handler {
@@ -50,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /v1/status", s.status)
+	mux.HandleFunc("GET /v1/ledgers/latest/bundle", s.latestBundle)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
 	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), mux)
@@ -95,6 +97,26 @@ func errOr(v uint32, err error) any {
 		return map[string]string{"error": err.Error()}
 	}
 	return v
+}
+
+// latestBundle redirects to the bundle of the newest archived ledger. The
+// redirect is short-lived; the target URL is immutable and cacheable forever.
+func (s *Server) latestBundle(w http.ResponseWriter, r *http.Request) {
+	if s.ArchiveTip == nil {
+		writeError(w, http.StatusNotImplemented, "archive tip unavailable")
+		return
+	}
+	tip, err := s.ArchiveTip(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	target := "/v1/ledgers/" + strconv.FormatUint(uint64(tip), 10) + "/bundle"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (s *Server) ledgerBundle(w http.ResponseWriter, r *http.Request) {
