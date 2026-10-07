@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-07
+
 ### Added
 
 - `exnode bundle` and `exnode serve`: build proof bundles from history archives
@@ -28,4 +30,5 @@ All notable changes to this project are documented here. The format follows
 
 - Bumped `klauspost/compress` to 1.18.7 (GO-2026-5841; not reachable from exnode).
 
-[Unreleased]: https://github.com/Externalize-Labs/externalize-node/commits/main
+[Unreleased]: https://github.com/Externalize-Labs/externalize-node/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Externalize-Labs/externalize-node/releases/tag/v0.1.0
