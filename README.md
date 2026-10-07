@@ -26,8 +26,13 @@ can refuse to answer, but it cannot produce a bundle that verifies.
 
 ## Quick start
 
+Install with Go, download a binary from
+[Releases](https://github.com/Externalize-Labs/externalize-node/releases), or
+run the image (`ghcr.io/externalize-labs/exnode`, amd64 and arm64):
+
 ```sh
 go install github.com/Externalize-Labs/externalize-node/cmd/exnode@latest
+docker run --rm ghcr.io/externalize-labs/exnode version
 
 # prove a contract call's return value and events (ledger looked up via RPC)
 exnode bundle --rpc https://mainnet.sorobanrpc.com \
