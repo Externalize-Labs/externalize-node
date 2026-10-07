@@ -110,7 +110,7 @@ func main() {
 	case "cache":
 		err = runCache(os.Args[2:])
 	case "version":
-		fmt.Println("exnode", version)
+		fmt.Println("exnode", buildVersion())
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
