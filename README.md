@@ -98,6 +98,22 @@ docker build -t exnode .
 docker run -p 8080:8080 -e EXNODE_RPC=https://mainnet.sorobanrpc.com exnode
 ```
 
+## Serverless (Vercel)
+
+[`api/exnode.go`](api/exnode.go) runs the same server as a Vercel function, and
+[`vercel.json`](vercel.json) routes every path to it. Because the node is
+untrusted, a public deployment needs no secrets:
+
+```sh
+vercel deploy --prod -e EXNODE_RPC=https://mainnet.sorobanrpc.com
+```
+
+It reads the same `EXNODE_*` variables as `exnode serve`, with defaults for a
+public endpoint: any browser origin may call it, the rate limit (1 request/s,
+bursts of 10) keys on Vercel's `X-Real-Ip`, and checkpoint files are cached in
+the function's temp directory. Builds stop at 50 seconds, inside the platform's
+60-second limit; bundles are cached at the edge, so each one is built once.
+
 ## Conformance
 
 `testdata/bundle-64791359.json` is externalize-core's own fixture. The tests
@@ -113,7 +129,9 @@ that the copy matches upstream.
 | `internal/rpc` | `getTransaction`, `getEvents` and `getLatestLedger` client |
 | `internal/bundle` | Request validation, bundle assembly, invocation extraction from meta |
 | `internal/server` | HTTP routes, error mapping, ETags and gzip, metrics, rate limiting, CORS, access logs |
+| `internal/network` | Network passphrases and SDF's archive mirrors |
 | `cmd/exnode` | CLI |
+| `api` | Vercel function entry point, plus the OpenAPI description |
 
 ## Contributing
 
