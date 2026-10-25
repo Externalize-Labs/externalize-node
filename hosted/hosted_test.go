@@ -1,4 +1,4 @@
-package api
+package hosted
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 
 func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("EXNODE_RPC", "https://rpc.example")
-	h, err := fromEnv()
+	h, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestFromEnvDefaults(t *testing.T) {
 
 func TestFromEnvRejectsUnknownNetwork(t *testing.T) {
 	t.Setenv("EXNODE_NETWORK", "moonnet")
-	if _, err := fromEnv(); err == nil {
+	if _, err := FromEnv(); err == nil {
 		t.Fatal("unknown network accepted")
 	}
 }

@@ -131,6 +131,7 @@ that the copy matches upstream.
 | `internal/server` | HTTP routes, error mapping, ETags and gzip, metrics, rate limiting, CORS, access logs |
 | `internal/network` | Network passphrases and SDF's archive mirrors |
 | `cmd/exnode` | CLI |
+| `hosted` | The server built from `EXNODE_*` for serverless platforms (public, because platforms compile function files outside the module) |
 | `api` | Vercel function entry point, plus the OpenAPI description |
 
 ## Contributing
