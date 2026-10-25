@@ -165,8 +165,8 @@ components:
   responses:
     Bundle:
       description: |
-        A proof bundle. Served with a strong `ETag`, `Cache-Control: immutable`,
-        and gzip when the client sends `Accept-Encoding: gzip`.
+        A proof bundle. Served with a strong `ETag`, `Cache-Control: immutable`
+        (with `s-maxage`, so CDNs keep it too), and gzip when the client sends `Accept-Encoding: gzip`.
       headers:
         ETag: { schema: { type: string } }
         X-Request-ID: { schema: { type: string } }

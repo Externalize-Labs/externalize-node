@@ -76,8 +76,8 @@ func TestLedgerBundleMatchesFixture(t *testing.T) {
 	if body != strings.ReplaceAll(string(want), "\r\n", "\n") {
 		t.Fatal("served bundle differs from the conformance fixture")
 	}
-	if !strings.Contains(hdr.Get("Cache-Control"), "immutable") {
-		t.Fatal("bundles should be cacheable forever")
+	if cc := hdr.Get("Cache-Control"); !strings.Contains(cc, "immutable") || !strings.Contains(cc, "s-maxage=") {
+		t.Fatalf("bundles should be cacheable forever, by browsers and CDNs: %q", cc)
 	}
 }
 
@@ -176,6 +176,29 @@ func TestRateLimitedRequestsGet429(t *testing.T) {
 	}
 	if code, _, _ := get(t, srv, "/healthz"); code != http.StatusOK {
 		t.Fatal("health checks are never limited")
+	}
+}
+
+func TestRateLimitKeysOnTheConfiguredHeader(t *testing.T) {
+	s := &server.Server{Builder: &bundle.Builder{Network: "x"}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RatePerSecond: 0.001, RateBurst: 1, ClientIPHeader: "X-Real-Ip"}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	status := func(ip string) int {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/status", nil)
+		req.Header.Set("X-Real-Ip", ip)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	// Every request arrives from the same proxy address; only the header differs.
+	if status("198.51.100.1") != http.StatusOK || status("198.51.100.1") != http.StatusTooManyRequests {
+		t.Fatal("the second request from one client should be limited")
+	}
+	if status("198.51.100.2") != http.StatusOK {
+		t.Fatal("a different client behind the same proxy has its own budget")
 	}
 }
 

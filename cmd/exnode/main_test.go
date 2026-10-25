@@ -1,29 +1,6 @@
 package main
 
-import (
-	"strings"
-	"testing"
-)
-
-func TestSDFMirrors(t *testing.T) {
-	got := strings.Split(sdfMirrors("core-live/core_live"), ",")
-	want := []string{
-		"https://history.stellar.org/prd/core-live/core_live_001",
-		"https://history.stellar.org/prd/core-live/core_live_002",
-		"https://history.stellar.org/prd/core-live/core_live_003",
-	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("got %v", got)
-	}
-}
-
-func TestEveryNetworkHasMirrors(t *testing.T) {
-	for name, n := range networks {
-		if n.passphrase == "" || len(strings.Split(n.archive, ",")) != 3 {
-			t.Errorf("%s: incomplete network definition", name)
-		}
-	}
-}
+import "testing"
 
 func TestRepeatableFlags(t *testing.T) {
 	var l list

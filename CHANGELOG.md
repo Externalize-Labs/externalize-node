@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Serverless deployment: `api/exnode.go` runs the HTTP server as a Vercel
+  function configured from the usual `EXNODE_*` variables, with `vercel.json`.
+- `--client-ip-header` (`EXNODE_CLIENT_IP_HEADER`): rate-limit on a header set
+  by the proxy in front of the node, such as Vercel's `X-Real-Ip`.
+
+### Changed
+
+- Bundles are served with `s-maxage` as well, so CDNs cache them like browsers.
+- The network table moved from `cmd/exnode` into `internal/network`.
+
 ## [0.1.0] - 2026-10-07
 
 ### Added
