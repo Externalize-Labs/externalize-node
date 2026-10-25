@@ -178,6 +178,7 @@ func runServe(args []string) error {
 	rate := fs.Float64("rate", 5, "requests per second per client IP on /v1 routes (0 disables)")
 	burst := fs.Float64("burst", 20, "requests a client may burst before the rate applies")
 	cors := fs.String("cors", env("EXNODE_CORS", ""), "browser origins allowed to call the API, comma-separated (\"*\" for any)")
+	ipHeader := fs.String("client-ip-header", env("EXNODE_CLIENT_IP_HEADER", ""), "header holding the client address for rate limiting; only one your proxy overwrites on every request")
 	_ = fs.Parse(args)
 
 	b, err := c.builder()
@@ -185,7 +186,7 @@ func runServe(args []string) error {
 		return err
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip, RatePerSecond: *rate, RateBurst: *burst}
+	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip, RatePerSecond: *rate, RateBurst: *burst, ClientIPHeader: *ipHeader}
 	for _, o := range strings.Split(*cors, ",") {
 		if o = strings.TrimSpace(o); o != "" {
 			s.CORSOrigins = append(s.CORSOrigins, o)

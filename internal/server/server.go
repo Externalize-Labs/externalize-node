@@ -31,6 +31,10 @@ type Server struct {
 	// RatePerSecond and RateBurst limit /v1 requests per client IP (0 disables).
 	RatePerSecond float64
 	RateBurst     float64
+	// ClientIPHeader names a request header carrying the client's address,
+	// for nodes behind a proxy that sets it on every request (empty: use the
+	// connection's address). See clientIP before setting it.
+	ClientIPHeader string
 	// CORSOrigins lists browser origins allowed to call the API ("*" for any).
 	CORSOrigins []string
 	// BuildTimeout bounds how long one bundle may take to build (default 2 minutes).
@@ -56,7 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ledgers/latest/bundle", s.latestBundle)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
-	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), mux)
+	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), s.ClientIPHeader, mux)
 	return withAccessLog(s.Log, s.metrics, withCORS(s.CORSOrigins, limited))
 }
 

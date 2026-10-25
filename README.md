@@ -67,6 +67,7 @@ exnode cache prune --cache DIR --max-size 2GB
 | `--cache` | `EXNODE_CACHE` | none; checkpoint files are immutable, so cached files never expire |
 | `--rate`, `--burst` | | 5 requests/s per client IP, bursts of 20, on `/v1` routes (`serve`) |
 | `--cors` | `EXNODE_CORS` | none; browser origins allowed to call the API, `*` for any (`serve`) |
+| `--client-ip-header` | `EXNODE_CLIENT_IP_HEADER` | none (the connection's address); behind a proxy, a header it overwrites on every request, such as Vercel's `X-Real-Ip` (`serve`) |
 | `--out` | | stdout; `bundle` writes the file atomically |
 
 The disk cache never expires entries on its own (checkpoint files are

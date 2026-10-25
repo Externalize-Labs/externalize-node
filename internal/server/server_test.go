@@ -179,6 +179,29 @@ func TestRateLimitedRequestsGet429(t *testing.T) {
 	}
 }
 
+func TestRateLimitKeysOnTheConfiguredHeader(t *testing.T) {
+	s := &server.Server{Builder: &bundle.Builder{Network: "x"}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RatePerSecond: 0.001, RateBurst: 1, ClientIPHeader: "X-Real-Ip"}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	status := func(ip string) int {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/status", nil)
+		req.Header.Set("X-Real-Ip", ip)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	// Every request arrives from the same proxy address; only the header differs.
+	if status("198.51.100.1") != http.StatusOK || status("198.51.100.1") != http.StatusTooManyRequests {
+		t.Fatal("the second request from one client should be limited")
+	}
+	if status("198.51.100.2") != http.StatusOK {
+		t.Fatal("a different client behind the same proxy has its own budget")
+	}
+}
+
 func TestCORSForAllowedOrigins(t *testing.T) {
 	s := &server.Server{Builder: &bundle.Builder{Network: "x"}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), CORSOrigins: []string{"https://wallet.example"}}
 	srv := httptest.NewServer(s.Handler())
