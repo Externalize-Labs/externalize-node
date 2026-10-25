@@ -87,7 +87,7 @@ The full contract is [`api/openapi.yaml`](api/openapi.yaml).
 | `GET /metrics` | Prometheus metrics: requests by status class, bundles built and failed |
 
 Bundles carry a strong `ETag` (`If-None-Match` gets a 304), are cacheable
-forever (`Cache-Control: immutable`), and are gzipped for clients that accept it
+forever by browsers and CDNs (`Cache-Control: immutable` with `s-maxage`), and are gzipped for clients that accept it
 (about 3.3x smaller). Every response has an `X-Request-ID`, and every request is
 logged as structured JSON. Errors are JSON `{"error": "…"}`: 400 bad input, 404
 not archived yet or outside RPC retention, 429 rate limited (with

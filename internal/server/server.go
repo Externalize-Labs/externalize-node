@@ -201,7 +201,8 @@ func writeBundle(w http.ResponseWriter, r *http.Request, body []byte) {
 	h := w.Header()
 	h.Set("ETag", etag)
 	// Archived ledgers never change, so neither does a bundle built from one.
-	h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	// s-maxage lets shared caches (a CDN in front of the node) keep it too.
+	h.Set("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable")
 	h.Add("Vary", "Accept-Encoding")
 	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
 		w.WriteHeader(http.StatusNotModified)

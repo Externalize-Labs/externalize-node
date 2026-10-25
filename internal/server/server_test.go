@@ -76,8 +76,8 @@ func TestLedgerBundleMatchesFixture(t *testing.T) {
 	if body != strings.ReplaceAll(string(want), "\r\n", "\n") {
 		t.Fatal("served bundle differs from the conformance fixture")
 	}
-	if !strings.Contains(hdr.Get("Cache-Control"), "immutable") {
-		t.Fatal("bundles should be cacheable forever")
+	if cc := hdr.Get("Cache-Control"); !strings.Contains(cc, "immutable") || !strings.Contains(cc, "s-maxage=") {
+		t.Fatalf("bundles should be cacheable forever, by browsers and CDNs: %q", cc)
 	}
 }
 
