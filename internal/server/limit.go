@@ -49,9 +49,19 @@ func (l *rateLimiter) allow(client string) bool {
 	return true
 }
 
-// clientIP is the connection's remote address. Behind a reverse proxy, put
-// the limit in the proxy instead: X-Forwarded-For is trivially forged.
-func clientIP(r *http.Request) string {
+// clientIP identifies the client for rate limiting: the value of header when
+// one is configured and present, otherwise the connection's remote address.
+//
+// Only name a header that the proxy in front of exnode sets on every request,
+// replacing whatever the client sent (Vercel's X-Real-Ip, for example). A
+// header the client controls, such as a plain X-Forwarded-For, lets it claim a
+// fresh identity on every request; without such a proxy, leave header empty.
+func clientIP(r *http.Request, header string) string {
+	if header != "" {
+		if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
+			return v
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -59,12 +69,12 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func withRateLimit(l *rateLimiter, next http.Handler) http.Handler {
+func withRateLimit(l *rateLimiter, header string, next http.Handler) http.Handler {
 	if l == nil || l.PerSecond <= 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/v1/") || l.allow(clientIP(r)) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/") || l.allow(clientIP(r, header)) {
 			next.ServeHTTP(w, r)
 			return
 		}

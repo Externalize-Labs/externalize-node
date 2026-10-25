@@ -20,25 +20,12 @@ import (
 
 	"github.com/Externalize-Labs/externalize-node/internal/archive"
 	"github.com/Externalize-Labs/externalize-node/internal/bundle"
+	"github.com/Externalize-Labs/externalize-node/internal/network"
 	"github.com/Externalize-Labs/externalize-node/internal/rpc"
 	"github.com/Externalize-Labs/externalize-node/internal/server"
 )
 
 var version = "dev"
-
-var networks = map[string]struct{ passphrase, archive string }{
-	"public":  {"Public Global Stellar Network ; September 2015", sdfMirrors("core-live/core_live")},
-	"testnet": {"Test SDF Network ; September 2015", sdfMirrors("core-testnet/core_testnet")},
-}
-
-// sdfMirrors lists SDF's three history archives for a network.
-func sdfMirrors(prefix string) string {
-	var urls []string
-	for i := 1; i <= 3; i++ {
-		urls = append(urls, fmt.Sprintf("https://history.stellar.org/prd/%s_%03d", prefix, i))
-	}
-	return strings.Join(urls, ",")
-}
 
 const usage = `exnode builds Externalize proof bundles from history archives and Stellar RPC.
 
@@ -69,7 +56,8 @@ func (c *common) archiveURL() string {
 	if c.archive != "" {
 		return c.archive
 	}
-	return networks[c.network].archive
+	n, _ := network.Lookup(c.network)
+	return n.Archive
 }
 
 func (c *common) archiveClient() *archive.Client {
@@ -77,15 +65,11 @@ func (c *common) archiveClient() *archive.Client {
 }
 
 func (c *common) builder() (*bundle.Builder, error) {
-	n, ok := networks[c.network]
-	if !ok {
-		return nil, fmt.Errorf("unknown network %q (want public or testnet)", c.network)
+	n, err := network.Lookup(c.network)
+	if err != nil {
+		return nil, err
 	}
-	arch := c.archive
-	if arch == "" {
-		arch = n.archive
-	}
-	b := &bundle.Builder{Network: n.passphrase, Archive: archive.NewClient(arch, c.cache)}
+	b := &bundle.Builder{Network: n.Passphrase, Archive: archive.NewClient(c.archiveURL(), c.cache)}
 	if c.rpc != "" {
 		b.RPC = rpc.NewClient(c.rpc)
 	}
@@ -194,6 +178,7 @@ func runServe(args []string) error {
 	rate := fs.Float64("rate", 5, "requests per second per client IP on /v1 routes (0 disables)")
 	burst := fs.Float64("burst", 20, "requests a client may burst before the rate applies")
 	cors := fs.String("cors", env("EXNODE_CORS", ""), "browser origins allowed to call the API, comma-separated (\"*\" for any)")
+	ipHeader := fs.String("client-ip-header", env("EXNODE_CLIENT_IP_HEADER", ""), "header holding the client address for rate limiting; only one your proxy overwrites on every request")
 	_ = fs.Parse(args)
 
 	b, err := c.builder()
@@ -201,7 +186,7 @@ func runServe(args []string) error {
 		return err
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip, RatePerSecond: *rate, RateBurst: *burst}
+	s := &server.Server{Builder: b, Log: log, ArchiveTip: c.archiveClient().Tip, RatePerSecond: *rate, RateBurst: *burst, ClientIPHeader: *ipHeader}
 	for _, o := range strings.Split(*cors, ",") {
 		if o = strings.TrimSpace(o); o != "" {
 			s.CORSOrigins = append(s.CORSOrigins, o)
@@ -236,8 +221,8 @@ func runStatus(args []string) error {
 	var c common
 	c.register(fs)
 	_ = fs.Parse(args)
-	if _, ok := networks[c.network]; !ok && c.archive == "" {
-		return fmt.Errorf("unknown network %q (want public or testnet)", c.network)
+	if _, err := network.Lookup(c.network); err != nil && c.archive == "" {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -1,9 +1,26 @@
 package server
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestClientIP(t *testing.T) {
+	r := httptest.NewRequest("GET", "/v1/status", nil)
+	r.RemoteAddr = "10.0.0.7:41234"
+	r.Header.Set("X-Real-Ip", " 203.0.113.9 ")
+	if got := clientIP(r, ""); got != "10.0.0.7" {
+		t.Fatalf("without a header: %q", got)
+	}
+	if got := clientIP(r, "X-Real-Ip"); got != "203.0.113.9" {
+		t.Fatalf("with a header: %q", got)
+	}
+	r.Header.Del("X-Real-Ip")
+	if got := clientIP(r, "X-Real-Ip"); got != "10.0.0.7" {
+		t.Fatalf("header configured but absent: %q", got)
+	}
+}
 
 func TestRateLimitPerClient(t *testing.T) {
 	now := time.Unix(0, 0)

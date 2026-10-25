@@ -31,6 +31,10 @@ type Server struct {
 	// RatePerSecond and RateBurst limit /v1 requests per client IP (0 disables).
 	RatePerSecond float64
 	RateBurst     float64
+	// ClientIPHeader names a request header carrying the client's address,
+	// for nodes behind a proxy that sets it on every request (empty: use the
+	// connection's address). See clientIP before setting it.
+	ClientIPHeader string
 	// CORSOrigins lists browser origins allowed to call the API ("*" for any).
 	CORSOrigins []string
 	// BuildTimeout bounds how long one bundle may take to build (default 2 minutes).
@@ -56,7 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ledgers/latest/bundle", s.latestBundle)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
-	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), mux)
+	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), s.ClientIPHeader, mux)
 	return withAccessLog(s.Log, s.metrics, withCORS(s.CORSOrigins, limited))
 }
 
@@ -197,7 +201,8 @@ func writeBundle(w http.ResponseWriter, r *http.Request, body []byte) {
 	h := w.Header()
 	h.Set("ETag", etag)
 	// Archived ledgers never change, so neither does a bundle built from one.
-	h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	// s-maxage lets shared caches (a CDN in front of the node) keep it too.
+	h.Set("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable")
 	h.Add("Vary", "Accept-Encoding")
 	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
 		w.WriteHeader(http.StatusNotModified)

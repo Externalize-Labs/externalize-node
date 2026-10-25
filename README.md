@@ -67,6 +67,7 @@ exnode cache prune --cache DIR --max-size 2GB
 | `--cache` | `EXNODE_CACHE` | none; checkpoint files are immutable, so cached files never expire |
 | `--rate`, `--burst` | | 5 requests/s per client IP, bursts of 20, on `/v1` routes (`serve`) |
 | `--cors` | `EXNODE_CORS` | none; browser origins allowed to call the API, `*` for any (`serve`) |
+| `--client-ip-header` | `EXNODE_CLIENT_IP_HEADER` | none (the connection's address); behind a proxy, a header it overwrites on every request, such as Vercel's `X-Real-Ip` (`serve`) |
 | `--out` | | stdout; `bundle` writes the file atomically |
 
 The disk cache never expires entries on its own (checkpoint files are
@@ -86,7 +87,7 @@ The full contract is [`api/openapi.yaml`](api/openapi.yaml).
 | `GET /metrics` | Prometheus metrics: requests by status class, bundles built and failed |
 
 Bundles carry a strong `ETag` (`If-None-Match` gets a 304), are cacheable
-forever (`Cache-Control: immutable`), and are gzipped for clients that accept it
+forever by browsers and CDNs (`Cache-Control: immutable` with `s-maxage`), and are gzipped for clients that accept it
 (about 3.3x smaller). Every response has an `X-Request-ID`, and every request is
 logged as structured JSON. Errors are JSON `{"error": "…"}`: 400 bad input, 404
 not archived yet or outside RPC retention, 429 rate limited (with
@@ -96,6 +97,22 @@ not archived yet or outside RPC retention, 429 rate limited (with
 docker build -t exnode .
 docker run -p 8080:8080 -e EXNODE_RPC=https://mainnet.sorobanrpc.com exnode
 ```
+
+## Serverless (Vercel)
+
+[`api/exnode.go`](api/exnode.go) runs the same server as a Vercel function, and
+[`vercel.json`](vercel.json) routes every path to it. Because the node is
+untrusted, a public deployment needs no secrets:
+
+```sh
+vercel deploy --prod -e EXNODE_RPC=https://mainnet.sorobanrpc.com
+```
+
+It reads the same `EXNODE_*` variables as `exnode serve`, with defaults for a
+public endpoint: any browser origin may call it, the rate limit (1 request/s,
+bursts of 10) keys on Vercel's `X-Real-Ip`, and checkpoint files are cached in
+the function's temp directory. Builds stop at 50 seconds, inside the platform's
+60-second limit; bundles are cached at the edge, so each one is built once.
 
 ## Conformance
 
@@ -112,7 +129,9 @@ that the copy matches upstream.
 | `internal/rpc` | `getTransaction`, `getEvents` and `getLatestLedger` client |
 | `internal/bundle` | Request validation, bundle assembly, invocation extraction from meta |
 | `internal/server` | HTTP routes, error mapping, ETags and gzip, metrics, rate limiting, CORS, access logs |
+| `internal/network` | Network passphrases and SDF's archive mirrors |
 | `cmd/exnode` | CLI |
+| `api` | Vercel function entry point, plus the OpenAPI description |
 
 ## Contributing
 
