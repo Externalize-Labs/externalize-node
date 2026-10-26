@@ -311,3 +311,46 @@ func TestSlowUpstreamsTimeOutCleanly(t *testing.T) {
 		t.Fatalf("status %d: %s", code, body)
 	}
 }
+
+func TestBatchBundles(t *testing.T) {
+	srv := newServer(t)
+
+	// Valid batch with existing hash tx4 and an unknown hash
+	payload, _ := json.Marshal(map[string]any{
+		"transactions": []string{tx4, "0000000000000000000000000000000000000000000000000000000000000000"},
+	})
+	resp, err := http.Post(srv.URL+"/v1/bundles", "application/json", strings.NewReader(string(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Bundles []*bundle.Bundle  `json:"bundles"`
+		Errors  map[string]string `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Bundles) != 1 {
+		t.Fatalf("expected 1 bundle, got %d", len(res.Bundles))
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("expected 1 error for unknown tx, got %d", len(res.Errors))
+	}
+
+	// Empty list should return 400
+	emptyPayload, _ := json.Marshal(map[string]any{"transactions": []string{}})
+	respEmpty, err := http.Post(srv.URL+"/v1/bundles", "application/json", strings.NewReader(string(emptyPayload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	respEmpty.Body.Close()
+	if respEmpty.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty transactions list, got %d", respEmpty.StatusCode)
+	}
+}

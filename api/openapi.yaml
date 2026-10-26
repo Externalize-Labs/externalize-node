@@ -80,6 +80,43 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+  /v1/bundles:
+    post:
+      summary: Batch bundles for up to 50 transactions, grouped by ledger
+      operationId: batchBundles
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transactions]
+              properties:
+                transactions:
+                  type: array
+                  maxItems: 50
+                  items:
+                    $ref: "#/components/schemas/Hash"
+      responses:
+        "200":
+          description: One bundle per ledger, plus per-hash errors for unknown transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bundles:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Bundle"
+                  errors:
+                    type: object
+                    additionalProperties:
+                      type: string
+        "400": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /v1/status:
     get:
       summary: Archive tip and its lag behind RPC

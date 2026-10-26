@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -60,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ledgers/latest/bundle", s.latestBundle)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
+	mux.HandleFunc("POST /v1/bundles", s.batchBundles)
 	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), s.ClientIPHeader, mux)
 	return withAccessLog(s.Log, s.metrics, withCORS(s.CORSOrigins, limited))
 }
@@ -160,6 +162,87 @@ func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 		req.Transactions = []string{hash}
 	}
 	s.serve(w, r, req)
+}
+
+type batchRequest struct {
+	Transactions []string `json:"transactions"`
+}
+
+type batchResponse struct {
+	Bundles []*bundle.Bundle  `json:"bundles"`
+	Errors  map[string]string `json:"errors,omitempty"`
+}
+
+func (s *Server) batchBundles(w http.ResponseWriter, r *http.Request) {
+	if s.Builder.RPC == nil {
+		writeError(w, http.StatusNotImplemented, "an RPC endpoint is required for transaction batch requests")
+		return
+	}
+	var req batchRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Transactions) == 0 {
+		writeError(w, http.StatusBadRequest, "transactions list must not be empty")
+		return
+	}
+	if len(req.Transactions) > 50 {
+		writeError(w, http.StatusBadRequest, "transactions list exceeds maximum limit of 50")
+		return
+	}
+
+	timeout := s.BuildTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	ledgerGroups := make(map[uint32][]string)
+	errMap := make(map[string]string)
+	seen := make(map[string]bool)
+
+	for _, txHash := range req.Transactions {
+		txHash = strings.ToLower(strings.TrimSpace(txHash))
+		if txHash == "" {
+			continue
+		}
+		if seen[txHash] {
+			continue
+		}
+		seen[txHash] = true
+
+		tx, err := s.Builder.RPC.GetTransaction(ctx, txHash)
+		if err != nil {
+			errMap[txHash] = err.Error()
+			continue
+		}
+		ledgerGroups[tx.Ledger] = append(ledgerGroups[tx.Ledger], txHash)
+	}
+
+	bundles := make([]*bundle.Bundle, 0, len(ledgerGroups))
+	for ledger, txs := range ledgerGroups {
+		b, err := s.Builder.Build(ctx, bundle.Request{
+			Ledger:       ledger,
+			Transactions: txs,
+		})
+		if err != nil {
+			for _, txHash := range txs {
+				errMap[txHash] = err.Error()
+			}
+			continue
+		}
+		bundles = append(bundles, b)
+	}
+
+	resp := batchResponse{
+		Bundles: bundles,
+	}
+	if len(errMap) > 0 {
+		resp.Errors = errMap
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Request) {
