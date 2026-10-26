@@ -554,7 +554,10 @@ jobs:
               --jq '[.statuses[] | select((.context | ascii_downcase)
                 | contains("coderabbit"))] | length' 2>/dev/null; } \
               | awk '{s+=$1} END {print s+0}' )"
-            if [ "${CR_PRESENT:-0}" -eq 0 ] && [ "${SELF}" != "true" ]; then
+            # Only repositories that use CodeRabbit (.coderabbit.yaml on the
+            # base branch) are asked for a review; elsewhere this stays silent.
+            if [ "${CR_PRESENT:-0}" -eq 0 ] && [ "${SELF}" != "true" ] \
+               && [ -f .coderabbit.yaml ]; then
               CR_MARKER="<!-- BOT-CR-TRIGGER sha=${SHA} -->"
               CR_TRIGGERED="$(gh api "repos/${REPO}/issues/${PR}/comments" \
                 --jq "[.[] | select(.user.login == \"${BOT_LOGIN}\")
