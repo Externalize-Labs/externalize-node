@@ -48,7 +48,7 @@ type common struct {
 func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.network, "network", env("EXNODE_NETWORK", "public"), "public or testnet")
 	fs.StringVar(&c.archive, "archive", env("EXNODE_ARCHIVE", ""), "history archive mirror URLs, comma-separated (default: SDF's three archives for the network)")
-	fs.StringVar(&c.rpc, "rpc", env("EXNODE_RPC", ""), "Stellar RPC URL (needed for invocations and transaction lookups)")
+	fs.StringVar(&c.rpc, "rpc", env("EXNODE_RPC", ""), "Stellar RPC URLs, comma-separated (needed for invocations and transaction lookups)")
 	fs.StringVar(&c.cache, "cache", env("EXNODE_CACHE", ""), "directory for cached checkpoint files")
 }
 
@@ -193,7 +193,9 @@ func runServe(args []string) error {
 		}
 	}
 	if c.rpc != "" {
-		s.RPCLatest = rpc.NewClient(c.rpc).LatestLedger
+		rpcClient := rpc.NewClient(c.rpc)
+		s.RPCLatest = rpcClient.LatestLedger
+		s.RPCActive = rpcClient.LastEndpoint
 	}
 	srv := &http.Server{
 		Addr:              *addr,

@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,15 +41,38 @@ type Invocation struct {
 // UserAgent is sent with every RPC request.
 var UserAgent = "exnode"
 
-// Client talks JSON-RPC to a Stellar RPC endpoint.
+// Client talks JSON-RPC to one or more Stellar RPC endpoints with failover.
 type Client struct {
-	URL  string
-	HTTP *http.Client
+	Endpoints []string
+	HTTP      *http.Client
+	Attempts  int           // rounds over all endpoints
+	Backoff   time.Duration // wait after the first failed round; doubles each round
+
+	mu       sync.RWMutex
+	lastUsed string
 }
 
-// NewClient returns a client with a conservative timeout.
-func NewClient(url string) *Client {
-	return &Client{URL: url, HTTP: &http.Client{Timeout: 30 * time.Second}}
+// NewClient returns a client for one or more comma-separated RPC URLs.
+func NewClient(raw string) *Client {
+	var urls []string
+	for _, u := range strings.Split(raw, ",") {
+		if u = strings.TrimRight(strings.TrimSpace(u), "/"); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return &Client{
+		Endpoints: urls,
+		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		Attempts:  3,
+		Backoff:   500 * time.Millisecond,
+	}
+}
+
+// LastEndpoint returns the URL of the most recently successful RPC endpoint.
+func (c *Client) LastEndpoint() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastUsed
 }
 
 // GetTransaction implements Source.
@@ -117,36 +143,80 @@ func (c *Client) LatestLedger(ctx context.Context) (uint32, error) {
 }
 
 func (c *Client) call(ctx context.Context, method string, params, result any) error {
+	if len(c.Endpoints) == 0 {
+		return errors.New("no rpc endpoints configured")
+	}
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
-	if err != nil {
-		return err
+
+	var failures []error
+	wait := c.Backoff
+	rounds := max(c.Attempts, 1)
+
+	for round := 0; round < rounds; round++ {
+		for i := range c.Endpoints {
+			endpoint := c.Endpoints[(round+i)%len(c.Endpoints)]
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("User-Agent", UserAgent)
+
+			resp, err := c.HTTP.Do(req)
+			if err != nil {
+				slog.Debug("rpc endpoint unreachable, attempting failover", "endpoint", endpoint, "error", err)
+				failures = append(failures, fmt.Errorf("%s: %w", endpoint, err))
+				continue
+			}
+			if resp.StatusCode >= 500 {
+				resp.Body.Close()
+				slog.Debug("rpc endpoint returned 5xx, attempting failover", "endpoint", endpoint, "status", resp.StatusCode)
+				failures = append(failures, fmt.Errorf("%s: HTTP %d", endpoint, resp.StatusCode))
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				return fmt.Errorf("%s: HTTP %d", method, resp.StatusCode)
+			}
+
+			var env struct {
+				Result json.RawMessage `json:"result"`
+				Error  *struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&env)
+			resp.Body.Close()
+			if decodeErr != nil {
+				failures = append(failures, fmt.Errorf("%s: decoding response: %w", endpoint, decodeErr))
+				continue
+			}
+			if env.Error != nil {
+				return fmt.Errorf("%s: RPC error %d: %s", method, env.Error.Code, env.Error.Message)
+			}
+
+			c.mu.Lock()
+			c.lastUsed = endpoint
+			c.mu.Unlock()
+			slog.Debug("rpc request succeeded", "endpoint", endpoint, "method", method)
+
+			return json.Unmarshal(env.Result, result)
+		}
+
+		if round+1 < rounds {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+				wait *= 2
+			}
+		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", UserAgent)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: %w", method, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: HTTP %d", method, resp.StatusCode)
-	}
-	var env struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&env); err != nil {
-		return fmt.Errorf("%s: decoding response: %w", method, err)
-	}
-	if env.Error != nil {
-		return fmt.Errorf("%s: RPC error %d: %s", method, env.Error.Code, env.Error.Message)
-	}
-	return json.Unmarshal(env.Result, result)
+
+	return fmt.Errorf("all rpc endpoints failed: %v", failures)
 }

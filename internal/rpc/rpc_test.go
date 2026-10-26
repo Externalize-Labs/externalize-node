@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fake(t *testing.T, reply func(method string) any) *Client {
@@ -62,5 +63,39 @@ func TestLatestLedger(t *testing.T) {
 	})
 	if n, err := c.LatestLedger(context.Background()); err != nil || n != 64791999 {
 		t.Fatalf("%d %v", n, err)
+	}
+}
+
+func TestRPCFailoverBetweenEndpoints(t *testing.T) {
+	// First server returns 503
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv1.Close()
+
+	// Second server succeeds
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]any{
+				"status":        "SUCCESS",
+				"ledger":        1234,
+				"resultMetaXdr": "BBBB",
+			},
+		})
+	}))
+	defer srv2.Close()
+
+	c := NewClient(srv1.URL + ", " + srv2.URL)
+	c.Backoff = time.Millisecond
+
+	tx, err := c.GetTransaction(context.Background(), "failover_tx")
+	if err != nil {
+		t.Fatalf("expected successful failover to srv2, got err: %v", err)
+	}
+	if tx.Ledger != 1234 || tx.ResultMetaXDR != "BBBB" {
+		t.Fatalf("unexpected tx data: %+v", tx)
+	}
+	if c.LastEndpoint() != srv2.URL {
+		t.Fatalf("expected lastUsed endpoint to be %s, got %s", srv2.URL, c.LastEndpoint())
 	}
 }

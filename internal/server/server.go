@@ -28,6 +28,7 @@ type Server struct {
 	// Optional sources for GET /v1/status.
 	ArchiveTip func(context.Context) (uint32, error)
 	RPCLatest  func(context.Context) (uint32, error)
+	RPCActive  func() string
 	// RatePerSecond and RateBurst limit /v1 requests per client IP (0 disables).
 	RatePerSecond float64
 	RateBurst     float64
@@ -91,6 +92,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.RPCLatest != nil {
 		out["rpc_latest"] = errOr(latest, rpcErr)
+	}
+	if s.RPCActive != nil {
+		if ep := s.RPCActive(); ep != "" {
+			out["rpc_endpoint"] = ep
+		}
 	}
 	if tipErr == nil && rpcErr == nil && tip > 0 && latest >= tip {
 		out["archive_lag_ledgers"] = latest - tip

@@ -74,7 +74,7 @@ exnode cache prune --cache DIR --max-size 2GB
 |---|---|---|
 | `--network` | `EXNODE_NETWORK` | `public` (or `testnet`) |
 | `--archive` | `EXNODE_ARCHIVE` | SDF's three archives for the network, comma-separated; failed or corrupt mirrors are skipped with retries and backoff |
-| `--rpc` | `EXNODE_RPC` | none; needed for `--invocation`, `--contract`, or when `--ledger` is omitted |
+| `--rpc` | `EXNODE_RPC` | none; comma-separated list of Stellar RPC URLs with automated failover and backoff; needed for `--invocation`, `--contract`, or when `--ledger` is omitted |
 | `--cache` | `EXNODE_CACHE` | none; checkpoint files are immutable, so cached files never expire |
 | `--rate`, `--burst` | | 5 requests/s per client IP, bursts of 20, on `/v1` routes (`serve`) |
 | `--cors` | `EXNODE_CORS` | none; browser origins allowed to call the API, `*` for any (`serve`) |
