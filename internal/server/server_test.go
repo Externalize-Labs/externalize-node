@@ -126,6 +126,51 @@ func TestStatusReportsArchiveLag(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, `"archive_lag_ledgers":27`) || !strings.Contains(body, `"archive_tip":1023`) {
 		t.Fatalf("status %d: %s", code, body)
 	}
+	if !strings.Contains(body, `"next_checkpoint":1087`) {
+		t.Fatalf("expected next_checkpoint:1087, got: %s", body)
+	}
+	// (1087 - 1050) * 6 + 60 = 222 + 60 = 282
+	if !strings.Contains(body, `"next_checkpoint_eta_seconds":282`) {
+		t.Fatalf("expected next_checkpoint_eta_seconds:282, got: %s", body)
+	}
+}
+
+func TestStatusWithoutRPC(t *testing.T) {
+	s := &server.Server{
+		Builder:    &bundle.Builder{Network: "Test SDF Network ; September 2015"},
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ArchiveTip: func(context.Context) (uint32, error) { return 1023, nil },
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	code, body, _ := get(t, srv, "/v1/status")
+	if code != http.StatusOK || !strings.Contains(body, `"archive_tip":1023`) {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if !strings.Contains(body, `"next_checkpoint":1087`) {
+		t.Fatalf("expected next_checkpoint:1087, got: %s", body)
+	}
+	if strings.Contains(body, "next_checkpoint_eta_seconds") {
+		t.Fatalf("did not expect next_checkpoint_eta_seconds without RPC, got: %s", body)
+	}
+}
+
+func TestStatusETANeverNegative(t *testing.T) {
+	s := &server.Server{
+		Builder:    &bundle.Builder{Network: "Test SDF Network ; September 2015"},
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ArchiveTip: func(context.Context) (uint32, error) { return 1023, nil },
+		RPCLatest:  func(context.Context) (uint32, error) { return 1100, nil },
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	code, body, _ := get(t, srv, "/v1/status")
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if !strings.Contains(body, `"next_checkpoint_eta_seconds":0`) {
+		t.Fatalf("expected next_checkpoint_eta_seconds:0 when past checkpoint, got: %s", body)
+	}
 }
 
 func TestRequestsCarryAnID(t *testing.T) {

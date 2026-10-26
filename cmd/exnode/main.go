@@ -239,7 +239,13 @@ func runStatus(args []string) error {
 		return err
 	}
 	lag := int64(latest) - int64(tip)
-	fmt.Printf("rpc latest    %d\narchive lag   %d ledgers (~%ds)\n", latest, lag, lag*6)
+	next := tip + archive.CheckpointFrequency
+	ledgersUntil := int64(next) - int64(latest)
+	eta := ledgersUntil*6 + 60
+	if eta < 0 {
+		eta = 0
+	}
+	fmt.Printf("rpc latest    %d\narchive lag   %d ledgers (~%ds)\nnext checkpoint ETA ~%ds\n", latest, lag, lag*6, eta)
 	return nil
 }
 
