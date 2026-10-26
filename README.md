@@ -125,6 +125,12 @@ bursts of 10) keys on Vercel's `X-Real-Ip`, and checkpoint files are cached in
 the function's temp directory. Builds stop at 50 seconds, inside the platform's
 60-second limit; bundles are cached at the edge, so each one is built once.
 
+## Production Deployment
+
+For operators running `exnode` on a dedicated host or VM behind a reverse proxy (Caddy or NGINX) with TLS termination, persistent checkpoint volume caching, and client IP rate limiting:
+
+See the comprehensive [Production Deployment Guide](docs/deploy.md) for ready-to-run Docker Compose setups, automated cache pruning cron jobs, and route exposure guidelines.
+
 ## Conformance
 
 `testdata/bundle-64791359.json` is externalize-core's own fixture. The tests
