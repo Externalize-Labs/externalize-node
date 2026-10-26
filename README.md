@@ -50,6 +50,17 @@ transaction meta for roughly a week, so invocation proofs must be built in that
 window. `exnode status --rpc …` shows how far the archive currently trails.
 Once built, a bundle verifies forever.
 
+**Or use the public node** at <https://externalize-node.vercel.app>, which the
+[online verifier](https://externalize-labs.github.io/externalize/) uses. It
+runs this code (see [Serverless](#serverless-vercel)) against mainnet, is rate
+limited, and is best effort. Like any exnode it is untrusted, so verify what it
+returns:
+
+```sh
+curl -s https://externalize-node.vercel.app/v1/transactions/<hash>/bundle?op=0 > proof.json
+externalize verify --events proof.json
+```
+
 ## Commands
 
 ```text
