@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -298,6 +299,11 @@ func (slowArchive) Ledger(ctx context.Context, _ uint32, _ bool) (*archive.Ledge
 	return nil, ctx.Err()
 }
 
+func (slowArchive) RawFile(ctx context.Context, _ archive.Category, _ uint32) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func TestSlowUpstreamsTimeOutCleanly(t *testing.T) {
 	s := &server.Server{
 		Builder:      &bundle.Builder{Network: "x", Archive: slowArchive{}},
@@ -309,5 +315,51 @@ func TestSlowUpstreamsTimeOutCleanly(t *testing.T) {
 	code, body, _ := get(t, srv, "/v1/ledgers/64791359/bundle")
 	if code != http.StatusServiceUnavailable || !strings.Contains(body, "timed out") {
 		t.Fatalf("status %d: %s", code, body)
+	}
+}
+
+
+func TestCheckpointLedgerMatchesFixture(t *testing.T) {
+	srv := newServer(t)
+	// 64791359 is 0x03dca33f, (64791359+1)%64 == 0
+	code, body, hdr := get(t, srv, "/v1/checkpoints/64791359/ledger")
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	want, err := os.ReadFile("../../testdata/archive/ledger/03/dc/a3/ledger-03dca33f.xdr.gz")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if !bytes.Equal([]byte(body), want) {
+		t.Fatal("served checkpoint ledger differs from the fixture")
+	}
+	if ct := hdr.Get("Content-Type"); ct != "application/gzip" {
+		t.Fatalf("want Content-Type: application/gzip, got %q", ct)
+	}
+	if cc := hdr.Get("Cache-Control"); !strings.Contains(cc, "immutable") || !strings.Contains(cc, "s-maxage=") {
+		t.Fatalf("checkpoint ledgers should be cacheable forever, by browsers and CDNs: %q", cc)
+	}
+	if etag := hdr.Get("ETag"); etag == "" {
+		t.Fatal("missing ETag")
+	}
+}
+
+func TestCheckpointLedgerValidationAndNotFound(t *testing.T) {
+	srv := newServer(t)
+
+	// Non-checkpoint sequence: 400 naming the right one (64791359)
+	code, body, _ := get(t, srv, "/v1/checkpoints/64791350/ledger")
+	if code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", code, body)
+	}
+	if !strings.Contains(body, "64791359") {
+		t.Fatalf("expected error body to name 64791359, got: %s", body)
+	}
+
+	// Unpublished checkpoint: 404
+	// 1023 is (1023+1)%64 == 0, but not present in testdata/archive
+	code, body, _ = get(t, srv, "/v1/checkpoints/1023/ledger")
+	if code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", code, body)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -51,6 +52,7 @@ type Server struct {
 //	GET /v1/ledgers/latest/bundle  (302 to the newest archived ledger)
 //	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&contract=<C…>&txset=true
 //	GET /v1/transactions/{hash}/bundle?op=<n>
+//	GET /v1/checkpoints/{checkpoint}/ledger
 func (s *Server) Handler() http.Handler {
 	s.metrics = newMetrics()
 	mux := http.NewServeMux()
@@ -60,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ledgers/latest/bundle", s.latestBundle)
 	mux.HandleFunc("GET /v1/ledgers/{seq}/bundle", s.ledgerBundle)
 	mux.HandleFunc("GET /v1/transactions/{hash}/bundle", s.transactionBundle)
+	mux.HandleFunc("GET /v1/checkpoints/{checkpoint}/ledger", s.checkpointLedger)
 	limited := withRateLimit(newRateLimiter(s.RatePerSecond, max(s.RateBurst, 1)), s.ClientIPHeader, mux)
 	return withAccessLog(s.Log, s.metrics, withCORS(s.CORSOrigins, limited))
 }
@@ -160,6 +163,42 @@ func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 		req.Transactions = []string{hash}
 	}
 	s.serve(w, r, req)
+}
+
+func (s *Server) checkpointLedger(w http.ResponseWriter, r *http.Request) {
+	seq, err := strconv.ParseUint(r.PathValue("checkpoint"), 10, 32)
+	if err != nil || seq == 0 {
+		writeError(w, http.StatusBadRequest, "checkpoint must be a positive 32-bit integer")
+		return
+	}
+	chk := uint32(seq)
+	if (chk+1)%archive.CheckpointFrequency != 0 {
+		expected := archive.Checkpoint(chk)
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("%d is not a checkpoint sequence (did you mean %d?)", chk, expected))
+		return
+	}
+	if s.Builder == nil || s.Builder.Archive == nil {
+		writeError(w, http.StatusNotImplemented, "archive unavailable")
+		return
+	}
+	body, err := s.Builder.Archive.RawFile(r.Context(), archive.Headers, chk)
+	if err != nil {
+		writeError(w, statusFor(err), err.Error())
+		return
+	}
+
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	h := w.Header()
+	h.Set("ETag", etag)
+	// Archived files never change: serve them with the same immutable Cache-Control and ETag as bundles.
+	h.Set("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable")
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Type", "application/gzip")
+	_, _ = w.Write(body)
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Request) {

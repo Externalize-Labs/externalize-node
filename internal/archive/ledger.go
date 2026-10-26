@@ -22,6 +22,7 @@ type Ledger struct {
 // Source returns archived ledgers.
 type Source interface {
 	Ledger(ctx context.Context, seq uint32, withTransactions bool) (*Ledger, error)
+	RawFile(ctx context.Context, cat Category, checkpoint uint32) ([]byte, error)
 }
 
 // Ledger implements Source over a live archive. The checkpoint's category

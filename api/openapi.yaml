@@ -80,6 +80,35 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+  /v1/checkpoints/{checkpoint}/ledger:
+    get:
+      summary: Raw archived ledger headers for a checkpoint
+      operationId: checkpointLedger
+      description: |
+        Returns the checkpoint's `ledger-*.xdr.gz` file byte for byte.
+        The checkpoint must be a sequence where `(n + 1) % 64 == 0`.
+      parameters:
+        - name: checkpoint
+          in: path
+          required: true
+          description: Checkpoint ledger sequence number.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Raw gzipped ledger headers XDR stream.
+          headers:
+            ETag: { schema: { type: string } }
+            Cache-Control: { schema: { type: string } }
+            X-Request-ID: { schema: { type: string } }
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+        "304": { description: Not modified (matched `If-None-Match`). }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /v1/status:
     get:
       summary: Archive tip and its lag behind RPC
