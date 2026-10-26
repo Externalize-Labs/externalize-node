@@ -72,6 +72,10 @@ paths:
           in: query
           description: Prove operation `op` as a contract invocation instead of only proving the transaction was applied.
           schema: { type: integer, minimum: 0 }
+        - name: txset
+          in: query
+          description: Include the ledger's full transaction set.
+          schema: { type: boolean }
       responses:
         "200": { $ref: "#/components/responses/Bundle" }
         "304": { description: Not modified (matched `If-None-Match`). }

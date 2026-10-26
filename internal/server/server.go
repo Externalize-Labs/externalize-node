@@ -159,6 +159,7 @@ func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.Transactions = []string{hash}
 	}
+	req.WithTxSet = r.URL.Query().Get("txset") == "true"
 	s.serve(w, r, req)
 }
 

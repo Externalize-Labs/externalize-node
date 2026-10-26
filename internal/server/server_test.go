@@ -89,6 +89,14 @@ func TestTransactionBundle(t *testing.T) {
 	}
 }
 
+func TestTransactionBundleWithTxSet(t *testing.T) {
+	srv := newServer(t)
+	code, body, _ := get(t, srv, "/v1/transactions/"+tx4+"/bundle?txset=true")
+	if code != http.StatusOK || !strings.Contains(body, `"transactions":`) {
+		t.Fatalf("status %d: %s", code, body)
+	}
+}
+
 func TestErrorsMapToStatusCodes(t *testing.T) {
 	srv := newServer(t)
 	for path, want := range map[string]int{
