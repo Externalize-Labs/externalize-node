@@ -311,3 +311,50 @@ func TestSlowUpstreamsTimeOutCleanly(t *testing.T) {
 		t.Fatalf("status %d: %s", code, body)
 	}
 }
+
+func TestMetricsBundleDurationAndArchiveCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	arch := httptest.NewServer(http.FileServer(http.Dir("../../testdata/archive")))
+	defer arch.Close()
+
+	s := &server.Server{
+		Builder: &bundle.Builder{
+			Network: "Public Global Stellar Network ; September 2015",
+			Archive: archive.NewClient(arch.URL, cacheDir),
+		},
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// 1. Uncached request: should miss cache and fetch
+	code, _, _ := get(t, srv, "/v1/ledgers/64791359/bundle")
+	if code != http.StatusOK {
+		t.Fatalf("unexpected status %d", code)
+	}
+
+	// 2. Cached request: should hit local cache
+	code, _, _ = get(t, srv, "/v1/ledgers/64791359/bundle")
+	if code != http.StatusOK {
+		t.Fatalf("unexpected status %d", code)
+	}
+
+	// 3. Scrape /metrics
+	code, body, _ := get(t, srv, "/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("metrics endpoint returned %d", code)
+	}
+
+	if !strings.Contains(body, "exnode_bundle_build_duration_seconds_bucket") {
+		t.Errorf("metrics missing duration histogram bucket: %s", body)
+	}
+	if !strings.Contains(body, "exnode_bundle_build_duration_seconds_count") {
+		t.Errorf("metrics missing duration histogram count: %s", body)
+	}
+	if !strings.Contains(body, "exnode_archive_cache_hits_total") {
+		t.Errorf("metrics missing archive cache hits: %s", body)
+	}
+	if !strings.Contains(body, "exnode_archive_cache_misses_total") {
+		t.Errorf("metrics missing archive cache misses: %s", body)
+	}
+}

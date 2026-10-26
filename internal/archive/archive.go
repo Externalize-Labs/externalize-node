@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,6 +65,9 @@ type Client struct {
 	Attempts int           // rounds over all mirrors
 	Backoff  time.Duration // wait after the first failed round; doubles each round
 
+	CacheHits   atomic.Uint64
+	CacheMisses atomic.Uint64
+
 	memory *lru
 }
 
@@ -102,9 +106,11 @@ func (c *Client) File(ctx context.Context, cat Category, checkpoint uint32) ([]b
 	rel := Path(cat, checkpoint)
 	if c.CacheDir != "" {
 		if gz, err := os.ReadFile(filepath.Join(c.CacheDir, filepath.FromSlash(rel))); err == nil {
+			c.CacheHits.Add(1)
 			return gunzip(gz)
 		}
 	}
+	c.CacheMisses.Add(1)
 	gz, raw, err := c.fetch(ctx, rel)
 	if err != nil {
 		return nil, err

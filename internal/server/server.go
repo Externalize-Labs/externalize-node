@@ -53,6 +53,12 @@ type Server struct {
 //	GET /v1/transactions/{hash}/bundle?op=<n>
 func (s *Server) Handler() http.Handler {
 	s.metrics = newMetrics()
+	if s.Builder != nil && s.Builder.Archive != nil {
+		if c, ok := s.Builder.Archive.(*archive.Client); ok {
+			s.metrics.archiveHits = c.CacheHits.Load
+			s.metrics.archiveMisses = c.CacheMisses.Load
+		}
+	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /healthz", s.health)
@@ -163,6 +169,21 @@ func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Request) {
+	kind := "ledger"
+	if len(req.Invocations) > 0 {
+		kind = "invocation"
+	} else if len(req.Contracts) > 0 {
+		kind = "contract"
+	} else if len(req.Transactions) > 0 {
+		kind = "transaction"
+	}
+	start := time.Now()
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.observeDuration(kind, time.Since(start))
+		}
+	}()
+
 	timeout := s.BuildTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
