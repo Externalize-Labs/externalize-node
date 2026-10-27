@@ -1,8 +1,8 @@
 module github.com/Externalize-Labs/externalize-node
 
-go 1.25
+go 1.25.0
 
-require github.com/stellar/go-stellar-sdk v0.7.3
+require github.com/stellar/go-stellar-sdk v0.8.0
 
 require (
 	github.com/klauspost/compress v1.18.7 // indirect
