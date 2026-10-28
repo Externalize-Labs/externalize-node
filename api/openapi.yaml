@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: exnode
-  version: 0.1.0
+  version: 0.2.0
   summary: Build Externalize proof bundles from Stellar history archives and RPC.
   description: |
     exnode is untrusted by design. It copies archive records byte for byte and
