@@ -88,6 +88,18 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 	if s.ArchiveTip != nil {
 		out["archive_tip"] = errOr(tip, tipErr)
+		if tipErr == nil {
+			next := tip + archive.CheckpointFrequency
+			out["next_checkpoint"] = next
+			if s.RPCLatest != nil && rpcErr == nil {
+				remaining := int64(next) - int64(latest)
+				if remaining < 0 {
+					remaining = 0
+				}
+				eta := remaining*6 + 60
+				out["next_checkpoint_eta_seconds"] = eta
+			}
+		}
 	}
 	if s.RPCLatest != nil {
 		out["rpc_latest"] = errOr(latest, rpcErr)

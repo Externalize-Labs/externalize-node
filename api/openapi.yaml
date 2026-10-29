@@ -96,6 +96,8 @@ paths:
                   archive_tip: { type: integer }
                   rpc_latest: { type: integer }
                   archive_lag_ledgers: { type: integer }
+                  next_checkpoint: { type: integer }
+                  next_checkpoint_eta_seconds: { type: integer }
   /healthz:
     get:
       summary: Liveness

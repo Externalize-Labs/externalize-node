@@ -93,7 +93,7 @@ The full contract is [`api/openapi.yaml`](api/openapi.yaml).
 | `GET /v1/ledgers/{seq}/bundle?tx=…&invocation=hash:op&contract=C…&txset=true` | Bundle for a ledger, with any claims |
 | `GET /v1/transactions/{hash}/bundle[?op=N]` | Transaction claim, or invocation claim for op N |
 | `GET /v1/ledgers/latest/bundle` | 302 to the newest archived ledger's bundle (query parameters carried over) |
-| `GET /v1/status` | Archive tip, RPC latest ledger, and the lag between them |
+| `GET /v1/status` | Archive tip, next checkpoint, RPC latest ledger, and the lag between them |
 | `GET /healthz` | Liveness |
 | `GET /metrics` | Prometheus metrics: requests by status class, bundles built and failed |
 
