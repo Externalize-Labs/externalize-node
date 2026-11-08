@@ -48,9 +48,9 @@ type Server struct {
 //	GET /healthz
 //	GET /metrics
 //	GET /v1/status
-//	GET /v1/ledgers/latest/bundle  (302 to the newest archived ledger)
+//	GET /v1/ledgers/latest/bundle  (302 to the newest ledger whose successor is archived)
 //	GET /v1/ledgers/{seq}/bundle?tx=<hash>&invocation=<hash>:<op>&contract=<C…>&txset=true
-//	GET /v1/transactions/{hash}/bundle?op=<n>
+//	GET /v1/transactions/{hash}/bundle?op=<n>&txset=true
 func (s *Server) Handler() http.Handler {
 	s.metrics = newMetrics()
 	mux := http.NewServeMux()
@@ -68,8 +68,8 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "network": s.Builder.Network, "rpc": s.Builder.RPC != nil})
 }
 
-// status reports how far the archive trails the network: ledgers newer than
-// the archive tip cannot be bundled yet.
+// status reports how far the archive trails the network: ledgers from the
+// archive tip on cannot be bundled yet, since a bundle needs its successor.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -105,7 +105,9 @@ func errOr(v uint32, err error) any {
 	return v
 }
 
-// latestBundle redirects to the bundle of the newest archived ledger. The
+// latestBundle redirects to the bundle of the newest ledger that can be
+// bundled. The tip ends its checkpoint, so its successor is not archived yet;
+// the ledger before it is the newest whose successor (the tip) is. The
 // redirect is short-lived; the target URL is immutable and cacheable forever.
 func (s *Server) latestBundle(w http.ResponseWriter, r *http.Request) {
 	if s.ArchiveTip == nil {
@@ -117,8 +119,12 @@ func (s *Server) latestBundle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if tip < 2 {
+		writeNotYet(w, "the archive has no ledger with an archived successor yet; retry in a few minutes")
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	target := "/v1/ledgers/" + strconv.FormatUint(uint64(tip), 10) + "/bundle"
+	target := "/v1/ledgers/" + strconv.FormatUint(uint64(tip-1), 10) + "/bundle"
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
@@ -148,8 +154,9 @@ func (s *Server) ledgerBundle(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) transactionBundle(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
-	req := bundle.Request{}
-	if op := r.URL.Query().Get("op"); op != "" {
+	q := r.URL.Query()
+	req := bundle.Request{WithTxSet: q.Get("txset") == "true"}
+	if op := q.Get("op"); op != "" {
 		n, err := strconv.ParseUint(op, 10, 32)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "op must be a non-negative integer")
@@ -173,6 +180,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, req bundle.Reques
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		s.metrics.failed.Add(1)
 		writeError(w, http.StatusServiceUnavailable, "building the bundle timed out; the archive or RPC is slow, try again")
+		return
+	}
+	if errors.Is(err, archive.ErrSuccessorNotPublished) {
+		s.metrics.failed.Add(1)
+		writeNotYet(w, err.Error())
 		return
 	}
 	if err != nil {
@@ -252,4 +264,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// retryAfter is how long a client should wait for the next checkpoint; the
+// archive publishes one every 64 ledgers, about six minutes.
+const retryAfter = "120"
+
+// writeNotYet answers a request that will succeed once the next checkpoint is
+// published. The answer must not be cached: it changes within minutes.
+func writeNotYet(w http.ResponseWriter, msg string) {
+	w.Header().Set("Retry-After", retryAfter)
+	w.Header().Set("Cache-Control", "no-store")
+	writeError(w, http.StatusServiceUnavailable, msg)
 }

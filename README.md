@@ -16,9 +16,31 @@
 
 A bundle packs everything needed to prove that a Stellar ledger, transaction
 or Soroban contract call happened: the ledger header, the validators' SCP
-messages, the ledger's results, and the call's return value and events.
+messages, the next ledger's SCP messages and transaction set, the ledger's
+results, and the call's return value and events.
 [`externalize`](https://github.com/Externalize-Labs/externalize) verifies it
 against the validators you trust.
+
+### Bundle format v2
+
+exnode emits `externalize/bundle/v2`
+([spec](https://github.com/Externalize-Labs/externalize/blob/main/docs/bundle-format.md)).
+Validators sign only a ledger's `StellarValue` (`txSetHash`, `closeTime`,
+upgrades), not its header, so the rest of header N (`txSetResultHash`,
+`previousLedgerHash`, …) is bound through ledger N+1: its externalized value's
+`txSetHash` is the hash of N+1's transaction set, and that set carries
+`previousLedgerHash = SHA-256(header N)`. v2 adds two required fields for this:
+
+| Field | Content | Archive source |
+|---|---|---|
+| `next_scp` | base64 XDR `ScpHistoryEntry` of ledger N+1 | `scp-*.xdr.gz` |
+| `next_transactions` | base64 XDR `TransactionHistoryEntry` of ledger N+1 (ext v1 carries the generalized set) | `transactions-*.xdr.gz` |
+
+Every other field is unchanged from v1. When N ends its checkpoint (N+1 is a
+multiple of 64), these records are in the next checkpoint's files; until that
+checkpoint is published, exnode refuses to build the bundle (`exnode bundle`
+fails, the HTTP routes answer 503 with `Retry-After`) rather than emit one
+without them. That takes one checkpoint interval, about six minutes.
 
 **exnode is untrusted by design.** It copies archive records byte for byte and
 never decides whether anything is valid; the verifier does. A compromised exnode
@@ -47,7 +69,9 @@ externalize verify --events pool.json
 
 Archives publish every 64 ledgers (about six minutes) and RPC keeps
 transaction meta for roughly a week, so invocation proofs must be built in that
-window. `exnode status --rpc …` shows how far the archive currently trails.
+window. A ledger can be bundled once its successor is archived, so the newest
+bundleable ledger is the one before the archive tip. `exnode status --rpc …`
+shows how far the archive currently trails.
 Once built, a bundle verifies forever.
 
 **Or use the public node** at <https://externalize-node.vercel.app>, which the
@@ -91,8 +115,8 @@ The full contract is [`api/openapi.yaml`](api/openapi.yaml).
 | Route | Returns |
 |---|---|
 | `GET /v1/ledgers/{seq}/bundle?tx=…&invocation=hash:op&contract=C…&txset=true` | Bundle for a ledger, with any claims |
-| `GET /v1/transactions/{hash}/bundle[?op=N]` | Transaction claim, or invocation claim for op N |
-| `GET /v1/ledgers/latest/bundle` | 302 to the newest archived ledger's bundle (query parameters carried over) |
+| `GET /v1/transactions/{hash}/bundle[?op=N][&txset=true]` | Transaction claim, or invocation claim for op N; `txset=true` adds the transaction set, as on the ledger route |
+| `GET /v1/ledgers/latest/bundle` | 302 to the bundle of the newest ledger whose successor is archived, the one before the archive tip (query parameters carried over) |
 | `GET /v1/status` | Archive tip, RPC latest ledger, and the lag between them |
 | `GET /healthz` | Liveness |
 | `GET /metrics` | Prometheus metrics: requests by status class, bundles built and failed |
@@ -102,7 +126,9 @@ forever by browsers and CDNs (`Cache-Control: immutable` with `s-maxage`), and a
 (about 3.3x smaller). Every response has an `X-Request-ID`, and every request is
 logged as structured JSON. Errors are JSON `{"error": "…"}`: 400 bad input, 404
 not archived yet or outside RPC retention, 429 rate limited (with
-`Retry-After`), 501 no RPC configured, 502 upstream failure.
+`Retry-After`), 501 no RPC configured, 502 upstream failure, 503 the next
+checkpoint (holding the successor of a checkpoint's last ledger) is not
+published yet (with `Retry-After`, never cached) or the build timed out.
 
 ```sh
 docker build -t exnode .
@@ -131,6 +157,21 @@ the function's temp directory. Builds stop at 50 seconds, inside the platform's
 build the same bundle from a local copy of the mainnet archive layout through
 the real archive and RPC clients, and require byte equality. CI also checks
 that the copy matches upstream.
+
+The v2 fixture was regenerated with exnode from SDF's mainnet archive,
+`https://history.stellar.org/prd/core-live/core_live_001/`. Ledger 64791359
+ends its checkpoint, so its successor's records come from the next one:
+
+- `ledger/03/dc/a3/ledger-03dca33f.xdr.gz`, `scp/03/dc/a3/scp-03dca33f.xdr.gz`,
+  `results/03/dc/a3/results-03dca33f.xdr.gz` (ledger 64791359)
+- `scp/03/dc/a3/scp-03dca37f.xdr.gz`,
+  `transactions/03/dc/a3/transactions-03dca37f.xdr.gz` (ledger 64791360)
+
+The transaction meta for the invocation claim comes from `testdata/rpc`, since
+RPC no longer retains that ledger. Some files under `testdata/archive` are
+trimmed to the records the tests need; the testnet successor records (ledger 5052928) come
+from `https://history.stellar.org/prd/core-testnet/core_testnet_001/`
+checkpoint `004d1a3f`.
 
 ## Layout
 

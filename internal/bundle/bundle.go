@@ -21,20 +21,27 @@ import (
 )
 
 // Format is the bundle format tag, shared with externalize-core.
-const Format = "externalize/bundle/v1"
+const Format = "externalize/bundle/v2"
 
 // MaxClaims bounds the claims in one bundle.
 const MaxClaims = 64
 
 // Bundle mirrors externalize-core's Bundle. Field order is the JSON order.
+//
+// NextSCP and NextTransactions are ledger N+1's ScpHistoryEntry and
+// TransactionHistoryEntry. Validators sign only StellarValue, so they are
+// what binds the rest of header N: V(N+1).txSetHash commits to N+1's
+// transaction set, whose previousLedgerHash is SHA-256(header N).
 type Bundle struct {
-	Format       string  `json:"format"`
-	Network      string  `json:"network"`
-	Ledger       string  `json:"ledger"`
-	SCP          string  `json:"scp"`
-	Results      string  `json:"results,omitempty"`
-	Transactions string  `json:"transactions,omitempty"`
-	Claims       []Claim `json:"claims,omitempty"`
+	Format           string  `json:"format"`
+	Network          string  `json:"network"`
+	Ledger           string  `json:"ledger"`
+	SCP              string  `json:"scp"`
+	NextSCP          string  `json:"next_scp"`
+	NextTransactions string  `json:"next_transactions"`
+	Results          string  `json:"results,omitempty"`
+	Transactions     string  `json:"transactions,omitempty"`
+	Claims           []Claim `json:"claims,omitempty"`
 }
 
 // Claim is a transaction or an invocation claim.
@@ -147,11 +154,17 @@ func (b *Builder) Build(ctx context.Context, req Request) (*Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A bundle without its successor's records cannot certify the header.
+	if len(led.NextSCP) == 0 || len(led.NextTransactions) == 0 {
+		return nil, fmt.Errorf("ledger %d: the archive returned no records for ledger %d", req.Ledger, req.Ledger+1)
+	}
 	out := &Bundle{
-		Format:  Format,
-		Network: b.Network,
-		Ledger:  b64(led.Header),
-		SCP:     b64(led.SCP),
+		Format:           Format,
+		Network:          b.Network,
+		Ledger:           b64(led.Header),
+		SCP:              b64(led.SCP),
+		NextSCP:          b64(led.NextSCP),
+		NextTransactions: b64(led.NextTransactions),
 	}
 	hasClaims := len(req.Transactions)+len(req.Invocations) > 0
 	if hasClaims {
