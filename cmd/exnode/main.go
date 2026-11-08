@@ -231,6 +231,10 @@ func runStatus(args []string) error {
 		return err
 	}
 	fmt.Printf("archive tip   %d (next checkpoint %d)\n", tip, tip+archive.CheckpointFrequency)
+	// A bundle needs its successor's records, and the tip's are in the next checkpoint.
+	if tip > 1 {
+		fmt.Printf("bundleable    up to %d\n", tip-1)
+	}
 	if c.rpc == "" {
 		return nil
 	}

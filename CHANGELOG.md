@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** bundles are now `externalize/bundle/v2`, with two new required
+  fields: `next_scp` (ledger N+1's `ScpHistoryEntry`) and `next_transactions`
+  (ledger N+1's `TransactionHistoryEntry`). Validators sign only a ledger's
+  `StellarValue`, so v1 bundles let the rest of the header
+  (`txSetResultHash`, `previousLedgerHash`) be forged; N+1's externalized
+  transaction set commits to `SHA-256(header N)`. Every route, `exnode bundle`
+  and the Vercel function emit v2. Verifiers that only accept v1 reject these
+  bundles.
+- A checkpoint's last ledger cannot be bundled until the next checkpoint is
+  published: `exnode bundle` fails with a retry message and the HTTP routes
+  answer 503 with `Retry-After` (never cached).
+- `GET /v1/ledgers/latest/bundle` redirects to the ledger before the archive
+  tip, the newest whose successor is archived. `exnode status` prints it.
+- `testdata/bundle-64791359.json` was regenerated as v2 from SDF's mainnet
+  archive.
+
+### Added
+
+- `txset=true` on `GET /v1/transactions/{hash}/bundle`, as on the ledger route.
+
 ## [0.2.0] - 2026-10-28
 
 ### Added

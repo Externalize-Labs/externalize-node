@@ -87,6 +87,19 @@ func TestTransactionBundle(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, `"kind": "invocation"`) {
 		t.Fatalf("status %d: %s", code, body)
 	}
+	if strings.Contains(body, `"transactions": "`) {
+		t.Fatal("transaction set included without txset=true")
+	}
+}
+
+func TestTransactionBundleWithTxSet(t *testing.T) {
+	srv := newServer(t)
+	for _, path := range []string{"/v1/transactions/" + tx4 + "/bundle?op=0&txset=true", "/v1/transactions/" + tx25 + "/bundle?txset=true"} {
+		code, body, _ := get(t, srv, path)
+		if code != http.StatusOK || !strings.Contains(body, `"transactions": "`) || !strings.Contains(body, `"next_transactions": "`) {
+			t.Fatalf("%s: status %d: %.200s", path, code, body)
+		}
+	}
 }
 
 func TestErrorsMapToStatusCodes(t *testing.T) {
@@ -266,7 +279,9 @@ func TestBundlesHaveETagsAndCompress(t *testing.T) {
 	}
 }
 
-func TestLatestRedirectsToTheArchiveTip(t *testing.T) {
+// The tip ends its checkpoint, so its successor is not archived yet; latest
+// is the ledger before it, whose successor is the tip.
+func TestLatestRedirectsToTheLedgerBeforeTheArchiveTip(t *testing.T) {
 	arch := httptest.NewServer(http.FileServer(http.Dir("../../testdata/archive")))
 	defer arch.Close()
 	s := &server.Server{
@@ -282,11 +297,55 @@ func TestLatestRedirectsToTheArchiveTip(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/v1/ledgers/64791359/bundle?txset=true" {
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/v1/ledgers/64791358/bundle?txset=true" {
 		t.Fatalf("got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if code, body, _ := get(t, srv, "/v1/ledgers/latest/bundle"); code != http.StatusOK || !strings.Contains(body, `"format": "externalize/bundle/v1"`) {
+	if code, body, _ := get(t, srv, "/v1/ledgers/latest/bundle"); code != http.StatusOK || !strings.Contains(body, `"format": "externalize/bundle/v2"`) {
 		t.Fatalf("following the redirect: %d", code)
+	}
+}
+
+func TestLatestBeforeAnyCheckpointIsNotYetAvailable(t *testing.T) {
+	s := &server.Server{
+		Builder:    &bundle.Builder{Network: "x"},
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ArchiveTip: func(context.Context) (uint32, error) { return 1, nil },
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	code, body, hdr := get(t, srv, "/v1/ledgers/latest/bundle")
+	if code != http.StatusServiceUnavailable || hdr.Get("Retry-After") == "" {
+		t.Fatalf("status %d: %s", code, body)
+	}
+}
+
+// A ledger that ends its checkpoint cannot be bundled until the next
+// checkpoint, which holds its successor, is published.
+func TestSuccessorNotPublishedIs503WithRetryAfter(t *testing.T) {
+	files := http.FileServer(http.Dir("../../testdata/archive"))
+	arch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "03dca37f") {
+			http.NotFound(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	}))
+	defer arch.Close()
+	s := &server.Server{
+		Builder: &bundle.Builder{Network: "Public Global Stellar Network ; September 2015", Archive: archive.NewClient(arch.URL, "")},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	code, body, hdr := get(t, srv, "/v1/ledgers/64791359/bundle?tx="+tx25)
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "retry in a few minutes") {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if hdr.Get("Retry-After") == "" || hdr.Get("Cache-Control") != "no-store" {
+		t.Fatalf("want Retry-After and no-store, got %q and %q", hdr.Get("Retry-After"), hdr.Get("Cache-Control"))
+	}
+	if code, body, _ := get(t, srv, "/v1/ledgers/64791358/bundle"); code != http.StatusOK {
+		t.Fatalf("mid-checkpoint ledger: status %d: %s", code, body)
 	}
 }
 

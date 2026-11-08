@@ -3,20 +3,30 @@ package archive
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
 
-// Ledger holds the raw XDR records an archive stores for one ledger. Records
-// are passed through byte for byte; nothing is re-encoded.
+// Ledger holds the raw XDR records an archive stores for one ledger, plus the
+// two records of its successor that bind its header. Records are passed
+// through byte for byte; nothing is re-encoded.
 type Ledger struct {
 	Sequence     uint32
 	Header       []byte // LedgerHeaderHistoryEntry
 	SCP          []byte // ScpHistoryEntry
 	Results      []byte // TransactionHistoryResultEntry, nil if the ledger had none
 	Transactions []byte // TransactionHistoryEntry, nil unless requested
+
+	// Validators sign only a ledger's StellarValue, not its header. Ledger
+	// N+1's externalized value commits to its transaction set, which carries
+	// previousLedgerHash = SHA-256(header N), so these two records certify
+	// the rest of the header. Always set.
+	NextSCP          []byte // ScpHistoryEntry of ledger Sequence+1
+	NextTransactions []byte // TransactionHistoryEntry of ledger Sequence+1
 }
 
 // Source returns archived ledgers.
@@ -24,42 +34,75 @@ type Source interface {
 	Ledger(ctx context.Context, seq uint32, withTransactions bool) (*Ledger, error)
 }
 
-// Ledger implements Source over a live archive. The checkpoint's category
-// files are fetched concurrently.
+// ErrSuccessorNotPublished means the ledger itself is archived but it ends its
+// checkpoint, and the next checkpoint, which holds the successor's records,
+// is not published yet. It clears within one checkpoint interval (about six
+// minutes).
+var ErrSuccessorNotPublished = errors.New("the next ledger's checkpoint is not published yet")
+
+type file struct {
+	cat Category
+	cp  uint32
+}
+
+// Ledger implements Source over a live archive. The checkpoint files of the
+// ledger and of its successor (the same checkpoint unless seq ends one) are
+// fetched concurrently.
 func (c *Client) Ledger(ctx context.Context, seq uint32, withTransactions bool) (*Ledger, error) {
-	cp := Checkpoint(seq)
-	cats := []Category{Headers, SCP, Results}
-	if withTransactions {
-		cats = append(cats, Transactions)
+	if seq == 0 || seq == math.MaxUint32 {
+		return nil, fmt.Errorf("ledger %d has no archived successor", seq)
 	}
-	records := make([][][]byte, len(cats))
-	errs := make([]error, len(cats))
+	cp, next := Checkpoint(seq), Checkpoint(seq+1)
+	// The ledger's own files come first so their errors take precedence.
+	files := []file{{Headers, cp}, {SCP, cp}, {Results, cp}}
+	if withTransactions || next == cp {
+		files = append(files, file{Transactions, cp})
+	}
+	if next != cp {
+		files = append(files, file{SCP, next}, file{Transactions, next})
+	}
+	records := make(map[file][][]byte, len(files))
+	errs := make([]error, len(files))
+	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for i, cat := range cats {
+	for i, f := range files {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			records[i], errs[i] = c.records(ctx, cat, cp)
+			recs, err := c.records(ctx, f.cat, f.cp)
+			mu.Lock()
+			records[f], errs[i] = recs, err
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
+	for i, err := range errs {
+		if err == nil {
+			continue
 		}
+		if files[i].cp != cp && errors.Is(err, ErrNotPublished) {
+			return nil, fmt.Errorf("ledger %d: %w (checkpoint %d); retry in a few minutes", seq, ErrSuccessorNotPublished, next)
+		}
+		return nil, err
 	}
 
 	out := &Ledger{Sequence: seq}
 	var err error
-	if out.Header, err = find(records[0], seq, headerSeq); err != nil {
+	if out.Header, err = find(records[file{Headers, cp}], seq, headerSeq); err != nil {
 		return nil, fmt.Errorf("ledger header: %w", err)
 	}
-	if out.SCP, err = find(records[1], seq, scpSeq); err != nil {
+	if out.SCP, err = find(records[file{SCP, cp}], seq, scpSeq); err != nil {
 		return nil, fmt.Errorf("scp messages: %w", err)
 	}
-	out.Results, _ = find(records[2], seq, leadingSeq)
+	out.Results, _ = find(records[file{Results, cp}], seq, leadingSeq)
 	if withTransactions {
-		out.Transactions, _ = find(records[3], seq, leadingSeq)
+		out.Transactions, _ = find(records[file{Transactions, cp}], seq, leadingSeq)
+	}
+	if out.NextSCP, err = find(records[file{SCP, next}], seq+1, scpSeq); err != nil {
+		return nil, fmt.Errorf("next ledger's scp messages: %w", err)
+	}
+	if out.NextTransactions, err = find(records[file{Transactions, next}], seq+1, leadingSeq); err != nil {
+		return nil, fmt.Errorf("next ledger's transaction set: %w", err)
 	}
 	return out, nil
 }

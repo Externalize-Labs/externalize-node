@@ -51,14 +51,19 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /v1/ledgers/latest/bundle:
     get:
-      summary: Redirect to the newest archived ledger's bundle
+      summary: Redirect to the bundle of the newest ledger whose successor is archived
       operationId: latestBundle
-      description: Query parameters are carried over. The redirect lives 60 seconds; its target is immutable.
+      description: |
+        The target is the ledger before the archive tip: the tip ends its
+        checkpoint, so its successor is not archived yet. Query parameters are
+        carried over. The redirect lives 60 seconds; its target is immutable.
       responses:
         "302": { description: Redirect to `/v1/ledgers/{seq}/bundle`. }
         "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /v1/transactions/{hash}/bundle:
     get:
       summary: Bundle for one transaction, looked up through RPC
@@ -72,6 +77,10 @@ paths:
           in: query
           description: Prove operation `op` as a contract invocation instead of only proving the transaction was applied.
           schema: { type: integer, minimum: 0 }
+        - name: txset
+          in: query
+          description: Include the ledger's full transaction set, as on the ledger route.
+          schema: { type: boolean }
       responses:
         "200": { $ref: "#/components/responses/Bundle" }
         "304": { description: Not modified (matched `If-None-Match`). }
@@ -80,13 +89,14 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "501": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /v1/status:
     get:
       summary: Archive tip and its lag behind RPC
       operationId: status
       responses:
         "200":
-          description: Ledgers newer than `archive_tip` cannot be bundled yet.
+          description: "Ledgers from `archive_tip` on cannot be bundled yet: a bundle needs its successor, and the tip's successor is in the next checkpoint."
           content:
             application/json:
               schema:
@@ -133,13 +143,15 @@ components:
       pattern: "^[0-9a-f]{64}$"
     Bundle:
       type: object
-      required: [format, network, ledger, scp]
+      required: [format, network, ledger, scp, next_scp, next_transactions]
       additionalProperties: false
       properties:
-        format: { type: string, const: externalize/bundle/v1 }
+        format: { type: string, const: externalize/bundle/v2 }
         network: { type: string }
         ledger: { type: string, description: Base64 XDR LedgerHeaderHistoryEntry }
         scp: { type: string, description: Base64 XDR ScpHistoryEntry }
+        next_scp: { type: string, description: "Base64 XDR ScpHistoryEntry of the next ledger (N+1); its EXTERNALIZE value commits to `next_transactions`" }
+        next_transactions: { type: string, description: "Base64 XDR TransactionHistoryEntry of the next ledger (N+1); ext v1 carries the generalized set, whose previousLedgerHash is the hash of `ledger`" }
         results: { type: string, description: Base64 XDR TransactionHistoryResultEntry }
         transactions: { type: string, description: Base64 XDR TransactionHistoryEntry }
         claims:
@@ -176,7 +188,10 @@ components:
     Error:
       description: |
         400 bad input, 404 not archived yet or outside RPC retention, 429 rate
-        limited (see `Retry-After`), 501 no RPC configured, 502 upstream failure.
+        limited (see `Retry-After`), 501 no RPC configured, 502 upstream failure,
+        503 the ledger ends its checkpoint and the next checkpoint (holding its
+        successor) is not published yet, or the build timed out (retry; a 503
+        for the successor carries `Retry-After`).
       content:
         application/json:
           schema:

@@ -2,11 +2,14 @@ package archive
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,8 +66,8 @@ func TestCheckpointFilesAreCachedForever(t *testing.T) {
 			t.Fatal("ledger records missing")
 		}
 	}
-	if n := hits.Load(); n != 3 {
-		t.Fatalf("expected one download per category (3), got %d", n)
+	if n := hits.Load(); n != 5 {
+		t.Fatalf("expected one download per file (5: three for the ledger, two for its successor), got %d", n)
 	}
 	if _, err := os.Stat(filepath.Join(cache, "scp", "03", "dc", "a3", "scp-03dca33f.xdr.gz")); err != nil {
 		t.Fatal("cache file not written at archive path")
@@ -158,8 +161,57 @@ func TestRepeatedLedgersComeFromMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n := hits.Load(); n != 3 {
-		t.Fatalf("expected 3 downloads, then memory hits; got %d downloads", n)
+	if n := hits.Load(); n != 5 {
+		t.Fatalf("expected 5 downloads, then memory hits; got %d downloads", n)
+	}
+}
+
+func TestSuccessorRecords(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	fs := http.FileServer(http.Dir("../../testdata/archive"))
+	url := server(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		fs.ServeHTTP(w, r)
+	})
+	c := NewClient(url, "")
+	// Mid-checkpoint: the successor is in the same checkpoint's scp and transactions files.
+	l, err := c.Ledger(context.Background(), 64791358, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.BigEndian.Uint32(l.NextTransactions) != 64791359 || len(l.NextSCP) == 0 || l.Transactions != nil {
+		t.Fatalf("wrong successor records for 64791358")
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "03dca37f") {
+			t.Fatalf("a mid-checkpoint ledger fetched the next checkpoint: %s", p)
+		}
+	}
+	// Checkpoint boundary: the successor comes from the next checkpoint.
+	l, err = c.Ledger(context.Background(), 64791359, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.BigEndian.Uint32(l.NextTransactions) != 64791360 || len(l.NextSCP) == 0 {
+		t.Fatalf("wrong successor records for 64791359")
+	}
+}
+
+func TestSuccessorNotPublished(t *testing.T) {
+	fs := http.FileServer(http.Dir("../../testdata/archive"))
+	url := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "03dca37f") {
+			http.NotFound(w, r)
+			return
+		}
+		fs.ServeHTTP(w, r)
+	})
+	_, err := fast(NewClient(url, "")).Ledger(context.Background(), 64791359, false)
+	if !errors.Is(err, ErrSuccessorNotPublished) || errors.Is(err, ErrNotPublished) {
+		t.Fatalf("want only ErrSuccessorNotPublished, got %v", err)
 	}
 }
 

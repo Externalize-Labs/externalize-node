@@ -3,6 +3,7 @@ package bundle_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/Externalize-Labs/externalize-node/internal/archive"
 	"github.com/Externalize-Labs/externalize-node/internal/bundle"
 	"github.com/Externalize-Labs/externalize-node/internal/rpc"
+	"github.com/stellar/go-stellar-sdk/xdr"
 )
 
 const (
@@ -186,8 +188,128 @@ func TestInvocationOperationOutOfRange(t *testing.T) {
 
 func TestLedgerMissingFromArchive(t *testing.T) {
 	_, err := newBuilder(t, false).Build(context.Background(), bundle.Request{Ledger: ledger + 64})
-	if !errors.Is(err, archive.ErrNotPublished) {
-		t.Fatalf("want ErrNotPublished, got %v", err)
+	if !errors.Is(err, archive.ErrNotPublished) || errors.Is(err, archive.ErrSuccessorNotPublished) {
+		t.Fatalf("want ErrNotPublished for the ledger itself, got %v", err)
+	}
+}
+
+// requireSuccessorBindsHeader checks, as the verifier does, that the bundle's
+// successor records commit to its header: some EXTERNALIZE for ledger N+1
+// carries a StellarValue whose txSetHash is the hash of next_transactions'
+// generalized set, and that set's previousLedgerHash is the hash of header N.
+func requireSuccessorBindsHeader(t *testing.T, b *bundle.Bundle) {
+	t.Helper()
+	var head xdr.LedgerHeaderHistoryEntry
+	var scp xdr.ScpHistoryEntry
+	var next xdr.TransactionHistoryEntry
+	decode := func(field, s string, v any) {
+		t.Helper()
+		if s == "" {
+			t.Fatalf("%s missing", field)
+		}
+		if err := xdr.SafeUnmarshalBase64(s, v); err != nil {
+			t.Fatalf("%s: %v", field, err)
+		}
+	}
+	decode("ledger", b.Ledger, &head)
+	decode("next_scp", b.NextSCP, &scp)
+	decode("next_transactions", b.NextTransactions, &next)
+	raw, err := head.Header.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(raw) != [32]byte(head.Hash) {
+		t.Fatal("ledger hash does not match its header")
+	}
+	seq := uint32(head.Header.LedgerSeq) + 1
+	if uint32(next.LedgerSeq) != seq || scp.V0 == nil || uint32(scp.V0.LedgerMessages.LedgerSeq) != seq {
+		t.Fatalf("successor records are not for ledger %d", seq)
+	}
+	if next.Ext.V != 1 || next.Ext.GeneralizedTxSet == nil || next.Ext.GeneralizedTxSet.V1TxSet == nil {
+		t.Fatal("next_transactions carries no generalized transaction set")
+	}
+	if next.Ext.GeneralizedTxSet.V1TxSet.PreviousLedgerHash != head.Hash {
+		t.Fatal("next transaction set does not point back at this header")
+	}
+	set, err := next.Ext.GeneralizedTxSet.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setHash := sha256.Sum256(set)
+	externalized := 0
+	for _, env := range scp.V0.LedgerMessages.Messages {
+		ext := env.Statement.Pledges.Externalize
+		if ext == nil || uint64(env.Statement.SlotIndex) != uint64(seq) {
+			continue
+		}
+		var v xdr.StellarValue
+		if err := xdr.SafeUnmarshal(ext.Commit.Value, &v); err != nil {
+			t.Fatal(err)
+		}
+		if [32]byte(v.TxSetHash) != setHash {
+			t.Fatal("an EXTERNALIZE commits to a different transaction set")
+		}
+		externalized++
+	}
+	if externalized == 0 {
+		t.Fatal("next_scp has no EXTERNALIZE for the successor")
+	}
+}
+
+// 64791359 ends its checkpoint: ledger 64791360's records come from the
+// checkpoint 64791423 files.
+func TestSuccessorAtACheckpointBoundary(t *testing.T) {
+	b, err := newBuilder(t, false).Build(context.Background(), bundle.Request{Ledger: ledger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireSuccessorBindsHeader(t, b)
+}
+
+// 64791358's successor is in the same checkpoint's files.
+func TestSuccessorMidCheckpoint(t *testing.T) {
+	b, err := newBuilder(t, false).Build(context.Background(), bundle.Request{Ledger: ledger - 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireSuccessorBindsHeader(t, b)
+	if b.Results != "" || b.Transactions != "" {
+		t.Fatal("a certificate-only bundle carries no results or transaction set of its own")
+	}
+}
+
+func TestSuccessorNotPublishedYet(t *testing.T) {
+	files := http.FileServer(http.Dir(testdata + "/archive"))
+	arch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "03dca37f") { // the next checkpoint
+			http.NotFound(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	}))
+	defer arch.Close()
+	b := &bundle.Builder{Network: public, Archive: archive.NewClient(arch.URL, "")}
+	got, err := b.Build(context.Background(), bundle.Request{Ledger: ledger, Transactions: []string{tx25}})
+	if !errors.Is(err, archive.ErrSuccessorNotPublished) || got != nil {
+		t.Fatalf("want ErrSuccessorNotPublished and no bundle, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "retry in a few minutes") {
+		t.Fatalf("error should tell the caller to retry: %v", err)
+	}
+	// The ledger before it needs nothing from the next checkpoint.
+	if _, err := b.Build(context.Background(), bundle.Request{Ledger: ledger - 1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBundlesAreV2(t *testing.T) {
+	b, err := newBuilder(t, false).Build(context.Background(), bundle.Request{Ledger: ledger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := encode(t, b)
+	if !strings.Contains(got, `"format": "externalize/bundle/v2"`) || !strings.Contains(got, `"next_scp": "`) || !strings.Contains(got, `"next_transactions": "`) {
+		t.Fatalf("not a v2 bundle:\n%.300s", got)
 	}
 }
 
@@ -255,4 +377,5 @@ func TestTestnetCertificates(t *testing.T) {
 	if got.Network != "Test SDF Network ; September 2015" || got.Ledger == "" || got.SCP == "" || got.Claims != nil {
 		t.Fatalf("unexpected testnet bundle: %+v", got)
 	}
+	requireSuccessorBindsHeader(t, got)
 }
